@@ -1,4 +1,4 @@
-import { recognizeWithAzure } from '../server/azure';
+import { recognizeWithAzure } from '../server/azure.js';
 
 declare const process: {
   env: Record<string, string | undefined>;

@@ -1,4 +1,4 @@
-import { generateTextWithAzure } from '../server/azure';
+import { generateTextWithAzure } from '../server/azure.js';
 
 declare const process: {
   env: Record<string, string | undefined>;
