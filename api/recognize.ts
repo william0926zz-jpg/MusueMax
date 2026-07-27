@@ -5,6 +5,7 @@ declare const process: {
 };
 
 export const config = {
+  maxDuration: 60,
   api: {
     bodyParser: {
       sizeLimit: '12mb',

@@ -489,11 +489,7 @@ async function generateTextWithAzure<T>(type: string, context: Record<string, un
       body: JSON.stringify({ type, context }),
       signal: controller.signal,
     });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result?.error ?? 'AI 文本生成失败，已使用本地模板。');
-    }
-    return result as T;
+    return await readApiJsonResponse<T>(response, 'AI 文本生成失败，已使用本地模板。');
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('AI 生成超时，已切回本地模板。');
@@ -502,6 +498,54 @@ async function generateTextWithAzure<T>(type: string, context: Record<string, un
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function readApiJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const rawText = await response.text();
+  const parsed = tryParseJson(rawText);
+
+  if (!response.ok) {
+    const serverMessage = extractApiErrorMessage(parsed, rawText);
+    throw new Error(serverMessage || fallbackMessage);
+  }
+
+  if (parsed !== null) {
+    return parsed as T;
+  }
+
+  throw new Error(rawText.trim() ? summarizeUnexpectedApiPayload(rawText) : fallbackMessage);
+}
+
+function tryParseJson(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  try {
+    return JSON.parse(normalized) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractApiErrorMessage(parsed: unknown, rawText: string) {
+  if (parsed && typeof parsed === 'object' && 'error' in parsed && typeof parsed.error === 'string') {
+    return parsed.error;
+  }
+  const normalized = rawText
+    .replace(/\s+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .trim();
+  if (!normalized) return '';
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
+function summarizeUnexpectedApiPayload(rawText: string) {
+  const normalized = rawText
+    .replace(/\s+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .trim();
+  if (!normalized) return 'AI 服务返回了空响应，请稍后重试。';
+  const snippet = normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+  return `AI 服务返回了无法解析的响应：${snippet}`;
 }
 
 function clampPromptText(value: string, maxLength: number) {
@@ -1299,10 +1343,12 @@ function App() {
           artifact: targetArtifact,
         }),
       });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result?.error ?? 'AI 识别失败，请稍后重试。');
-      }
+      const result = await readApiJsonResponse<{
+        matched?: boolean;
+        confidence?: number;
+        detectedName?: string;
+        reason?: string;
+      }>(response, 'AI 识别失败，请稍后重试。');
 
       const detectedName = String(result.detectedName ?? '未确认展品');
       const matchConfidence = normalizeMatchConfidence(

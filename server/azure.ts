@@ -150,11 +150,13 @@ async function generateMissionTextInBatches(
     });
   }
 
-  const settledChunks = await Promise.all(
-    chunkBodies.map(async ({ chunkIndex, chunkBody }) => ({
+  const settledChunks = await runChunkedMissionGeneration(
+    chunkBodies,
+    async ({ chunkIndex, chunkBody }) => ({
       chunkIndex,
       result: await requestStructuredText('missions', chunkBody, endpointUrl, apiKey, deployment, useResponsesApi),
-    })),
+    }),
+    2,
   );
 
   const batchedMissions = settledChunks
@@ -162,6 +164,27 @@ async function generateMissionTextInBatches(
     .flatMap(({ result }) => Array.isArray(result.missions) ? result.missions : []);
 
   return { missions: batchedMissions };
+}
+
+async function runChunkedMissionGeneration<TInput, TResult>(
+  items: TInput[],
+  worker: (item: TInput) => Promise<TResult>,
+  concurrency: number,
+) {
+  const results: TResult[] = [];
+  let nextIndex = 0;
+
+  async function consumeQueue() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => consumeQueue());
+  await Promise.all(workers);
+  return results;
 }
 
 async function requestStructuredText(
@@ -386,9 +409,10 @@ async function requestAzurePayload(endpointUrl: string, apiKey: string, response
       signal: controller.signal,
     });
 
-    const data = await response.json();
+    const rawText = await response.text();
+    const data = rawText.trim() ? tryParseJsonObject(rawText) : {};
     if (!response.ok) {
-      throw new Error(data?.error?.message ?? 'Azure AI 文本生成请求失败。');
+      throw new Error(readAzureErrorMessage(data, rawText));
     }
     return data as Record<string, unknown>;
   } catch (error) {
@@ -399,6 +423,25 @@ async function requestAzurePayload(endpointUrl: string, apiKey: string, response
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function tryParseJsonObject(rawText: string) {
+  try {
+    return JSON.parse(rawText) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function readAzureErrorMessage(data: Record<string, unknown>, rawText: string) {
+  const nestedError = data.error as { message?: string } | undefined;
+  if (nestedError?.message) return nestedError.message;
+  const normalized = rawText
+    .replace(/\s+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .trim();
+  if (!normalized) return 'Azure AI 文本生成请求失败。';
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
 function validateTextGenerationPayload(type: string, payload: Record<string, unknown>) {
