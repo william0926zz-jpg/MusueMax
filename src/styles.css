@@ -930,6 +930,19 @@ button {
 }
 
 .full { width: 100%; }
+.stack-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.microcopy {
+  margin: 10px 2px 0;
+  color: var(--theme-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .action-row { display: flex; justify-content: flex-end; margin-top: 18px; gap: 10px; }
 .action-row.center { justify-content: center; }
 

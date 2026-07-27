@@ -597,6 +597,32 @@ function buildMissionGenerationContext(
   };
 }
 
+function buildGenerationSignature(
+  museum: Museum,
+  artifacts: Artifact[],
+  storyStyle: StoryStyle,
+  subject: string,
+  grade: string,
+  duration: number,
+  goal: string,
+  teamCount: number,
+  theme: ThemeKey,
+  language: LanguageKey,
+) {
+  return JSON.stringify({
+    museumId: museum.id,
+    artifactIds: artifacts.map((artifact) => artifact.id),
+    storyStyle,
+    subject: subject.trim(),
+    grade: grade.trim(),
+    duration,
+    goal: goal.trim(),
+    teamCount,
+    theme,
+    language,
+  });
+}
+
 async function generateMissionDraftsWithAzure(
   museum: Museum,
   artifacts: Artifact[],
@@ -1025,7 +1051,10 @@ function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isGeneratingText, setIsGeneratingText] = useState(false);
+  const [generationStage, setGenerationStage] = useState<'idle' | 'background' | 'missions'>('idle');
   const [publishMessage, setPublishMessage] = useState('');
+  const [backgroundReadySignature, setBackgroundReadySignature] = useState('');
+  const [missionsReadySignature, setMissionsReadySignature] = useState('');
   const generationRequestIdRef = useRef(0);
 
   const filteredMuseums = useMemo(() => {
@@ -1047,6 +1076,12 @@ function App() {
     [artifacts, selectedArtifactIds],
   );
   const canGenerateFromSelection = selectedArtifactIds.length >= MIN_SELECTED_ARTIFACTS && selectedArtifactIds.length <= MAX_SELECTED_ARTIFACTS;
+  const currentGenerationSignature = useMemo(
+    () => buildGenerationSignature(selectedMuseum, selectedArtifacts, storyStyle, subject, grade, duration, goal, teamCount, activeTheme, language),
+    [selectedMuseum, selectedArtifacts, storyStyle, subject, grade, duration, goal, teamCount, activeTheme, language],
+  );
+  const hasReadyBackgroundForCurrentConfig = backgroundReadySignature === currentGenerationSignature;
+  const hasReadyMissionsForCurrentConfig = missionsReadySignature === currentGenerationSignature;
 
   useEffect(() => {
     document.body.classList.remove('theme-classic', 'theme-night', 'theme-future', 'theme-paper');
@@ -1209,17 +1244,36 @@ function App() {
     setSelectedArtifactIds([]);
   }
 
-  async function generateActivity() {
+  function buildPreviewActivity(nextVariant: number, code = activity.code) {
+    return createActivity(
+      selectedMuseum,
+      selectedArtifacts,
+      storyStyle,
+      subject,
+      grade,
+      duration,
+      goal,
+      teamCount,
+      code,
+      nextVariant,
+      activeTheme,
+      language,
+    );
+  }
+
+  async function generateBackgroundStory() {
     if (!canGenerateFromSelection) return;
     const nextVariant = missionVariant + 1;
     setMissionVariant(nextVariant);
-    const nextActivity = createActivity(selectedMuseum, selectedArtifacts, storyStyle, subject, grade, duration, goal, teamCount, activity.code, nextVariant, activeTheme, language);
+    const nextActivity = buildPreviewActivity(nextVariant, activity.code);
     const requestId = generationRequestIdRef.current + 1;
     generationRequestIdRef.current = requestId;
     setActivity(nextActivity);
     setTeacherStep(2);
     setIsGeneratingText(true);
-    setPublishMessage(t(language, '正在先生成整场冒险背景，再为每件展品生成任务序列...', 'Generating the overall adventure prologue first, then creating mission sequences for each artifact...'));
+    setGenerationStage('background');
+    setMissionsReadySignature('');
+    setPublishMessage(t(language, '正在生成整场冒险的背景故事...', 'Generating the adventure prologue...'));
     try {
       const background = await generateActivityBackgroundWithAzure(
         selectedMuseum,
@@ -1237,8 +1291,35 @@ function App() {
         : nextActivity.backgroundStory;
       if (generationRequestIdRef.current !== requestId) return;
       setActivity({ ...nextActivity });
-      setPublishMessage(t(language, '背景故事已生成，正在继续生成各展品任务...', 'The background story is ready. Continuing with artifact mission generation...'));
+      setBackgroundReadySignature(currentGenerationSignature);
+      setPublishMessage(t(language, '背景故事已生成，可以继续生成任务序列。', 'The background story is ready. You can continue with mission generation.'));
+    } catch (error) {
+      if (generationRequestIdRef.current !== requestId) return;
+      setBackgroundReadySignature(currentGenerationSignature);
+      setPublishMessage(
+        error instanceof Error
+          ? `${error.message} ${t(language, '已保留当前背景草稿，可继续生成任务序列。', 'The current fallback prologue has been kept, and you can still continue with mission generation.')}`
+          : t(language, '背景故事 AI 生成失败，已保留当前背景草稿，可继续生成任务序列。', 'AI prologue generation failed. The current fallback prologue has been kept, and you can still continue with mission generation.'),
+      );
+    } finally {
+      if (generationRequestIdRef.current !== requestId) return;
+      setIsGeneratingText(false);
+      setGenerationStage('idle');
+    }
+  }
 
+  async function generateMissionSequence() {
+    if (!canGenerateFromSelection || !hasReadyBackgroundForCurrentConfig) return;
+    const requestId = generationRequestIdRef.current + 1;
+    generationRequestIdRef.current = requestId;
+    const nextActivity = buildPreviewActivity(missionVariant || 1, activity.code);
+    nextActivity.backgroundStory = activity.backgroundStory;
+    setActivity(nextActivity);
+    setTeacherStep(2);
+    setIsGeneratingText(true);
+    setGenerationStage('missions');
+    setPublishMessage(t(language, '正在根据当前背景故事生成任务序列...', 'Generating mission sequences from the current prologue...'));
+    try {
       const generated = await generateMissionDraftsWithAzure(
         selectedMuseum,
         selectedArtifacts,
@@ -1248,7 +1329,7 @@ function App() {
         duration,
         goal,
         teamCount,
-        nextVariant,
+        missionVariant || 1,
         activeTheme,
         nextActivity.backgroundStory,
         language,
@@ -1256,13 +1337,15 @@ function App() {
       nextActivity.missions = normalizeGeneratedMissions(generated, nextActivity.missions);
       if (generationRequestIdRef.current !== requestId) return;
       setActivity({ ...nextActivity });
-      setPublishMessage(t(language, 'AI 已生成背景故事与新的任务序列。', 'AI has generated the background story and a new mission sequence.'));
+      setMissionsReadySignature(currentGenerationSignature);
+      setPublishMessage(t(language, '任务序列已生成，可以检查后发布活动。', 'The mission sequence is ready. Review it and publish when you are happy.'));
     } catch (error) {
       if (generationRequestIdRef.current !== requestId) return;
       setPublishMessage(error instanceof Error ? error.message : t(language, 'AI 文本生成失败，已使用本地模板。', 'AI text generation failed. The local fallback has been used.'));
     } finally {
       if (generationRequestIdRef.current !== requestId) return;
       setIsGeneratingText(false);
+      setGenerationStage('idle');
     }
   }
 
@@ -1508,7 +1591,8 @@ function App() {
                 onToggleArtifactSelection={toggleArtifactSelection}
                 onSelectAllArtifacts={selectAllArtifacts}
                 onClearArtifactSelection={clearArtifactSelection}
-                onGenerateActivity={generateActivity}
+                onGenerateBackground={generateBackgroundStory}
+                onGenerateMissions={generateMissionSequence}
                 onPublishActivity={publishActivity}
                 onCopyPublishLink={copyPublishLink}
                 onExportReport={exportReport}
@@ -1518,6 +1602,9 @@ function App() {
                 missionCompletions={missionCompletions}
                 missionVariant={missionVariant}
                 isGeneratingText={isGeneratingText}
+                generationStage={generationStage}
+                hasReadyBackgroundForCurrentConfig={hasReadyBackgroundForCurrentConfig}
+                hasReadyMissionsForCurrentConfig={hasReadyMissionsForCurrentConfig}
                 activeTheme={activeTheme}
                 activityHistory={activityHistory}
                 onRestoreActivity={restorePublishedActivity}
@@ -1729,7 +1816,8 @@ type TeacherWorkspaceProps = {
   onToggleArtifactSelection: (artifactId: string) => void;
   onSelectAllArtifacts: () => void;
   onClearArtifactSelection: () => void;
-  onGenerateActivity: () => void;
+  onGenerateBackground: () => void;
+  onGenerateMissions: () => void;
   onPublishActivity: () => void;
   onCopyPublishLink: () => void;
   onExportReport: () => void;
@@ -1739,6 +1827,9 @@ type TeacherWorkspaceProps = {
   missionCompletions: Record<string, string>;
   missionVariant: number;
   isGeneratingText: boolean;
+  generationStage: 'idle' | 'background' | 'missions';
+  hasReadyBackgroundForCurrentConfig: boolean;
+  hasReadyMissionsForCurrentConfig: boolean;
   activeTheme: ThemeKey;
   activityHistory: ActivityHistoryEntry[];
   onRestoreActivity: (entry: ActivityHistoryEntry) => void;
@@ -2319,6 +2410,8 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
   const previewMissions = previewMatchesSelection ? props.activity.missions : [];
   const hasRenderablePreview = previewMissions.some((mission) => mission.story.trim() || mission.requirement.trim() || mission.hint.trim());
   const hasBackgroundStory = props.activity.backgroundStory.some((paragraph) => paragraph.trim());
+  const isGeneratingBackground = props.isGeneratingText && props.generationStage === 'background';
+  const isGeneratingMissions = props.isGeneratingText && props.generationStage === 'missions';
   const feedbackClassName = props.publishMessage
     ? isGenerationFeedbackError(props.publishMessage)
       ? 'inline-alert'
@@ -2356,9 +2449,27 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
             <button key={style} className={props.storyStyle === style ? 'active' : ''} onClick={() => props.setStoryStyle(style)}>{getStoryStyleName(style, props.language)}</button>
           ))}
         </div>
-        <button className="primary-button full" onClick={props.onGenerateActivity} disabled={props.isGeneratingText}>
-          <Sparkles size={18} /> {props.isGeneratingText ? t(props.language, 'AI 生成中', 'AI Generating') : t(props.language, '生成任务序列', 'Generate Missions')}
-        </button>
+        <div className="stack-actions">
+          <button className="ghost-button full" onClick={props.onGenerateBackground} disabled={props.isGeneratingText}>
+            <BookOpen size={18} /> {isGeneratingBackground
+              ? t(props.language, '背景生成中', 'Generating Prologue')
+              : props.hasReadyBackgroundForCurrentConfig
+                ? t(props.language, '重新生成背景故事', 'Regenerate Prologue')
+                : t(props.language, '先生成背景故事', 'Generate Prologue First')}
+          </button>
+          <button className="primary-button full" onClick={props.onGenerateMissions} disabled={props.isGeneratingText || !props.hasReadyBackgroundForCurrentConfig}>
+            <Sparkles size={18} /> {isGeneratingMissions
+              ? t(props.language, '任务生成中', 'Generating Missions')
+              : t(props.language, '再生成任务序列', 'Generate Mission Sequence')}
+          </button>
+        </div>
+        <div className="microcopy">
+          {props.hasReadyBackgroundForCurrentConfig
+            ? props.hasReadyMissionsForCurrentConfig
+              ? t(props.language, '当前参数下的背景故事和任务序列都已经生成，可继续微调或直接发布。', 'The current prologue and mission sequence are ready. You can refine them or publish now.')
+              : t(props.language, '背景故事已经准备好。下一步再生成任务序列，能显著降低线上超时风险。', 'The prologue is ready. Generating missions as a second step greatly reduces deployment timeout risk.')
+            : t(props.language, '先生成这一轮的背景故事，再用它去驱动任务卡生成。', 'Generate the prologue first, then use it to drive the mission cards.')}
+        </div>
         {props.publishMessage && <div className={feedbackClassName}>{props.publishMessage}</div>}
       </section>
       <section className="panel mission-list">
