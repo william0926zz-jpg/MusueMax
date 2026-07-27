@@ -130,7 +130,7 @@ async function generateMissionTextInBatches(
 ) {
   const context = (body.context as Record<string, unknown> | undefined) ?? {};
   const artifacts = Array.isArray(context.artifacts) ? context.artifacts : [];
-  const chunkSize = 1;
+  const chunkSize = 3;
 
   if (artifacts.length <= chunkSize) {
     return requestStructuredText('missions', body, endpointUrl, apiKey, deployment, useResponsesApi);
@@ -205,7 +205,7 @@ async function requestStructuredText(
       : buildTextChatCompletionsBody(prompt);
 
     try {
-      const data = await requestAzurePayload(endpointUrl, apiKey, responseBody, 28000);
+      const data = await requestAzurePayload(endpointUrl, apiKey, responseBody, 12000);
       const rawContent = extractAzureText(data);
       const parsed = parseAzureJson(rawContent);
       return validateTextGenerationPayload(type, parsed);
@@ -463,16 +463,9 @@ function validateTextGenerationPayload(type: string, payload: Record<string, unk
 }
 
 function shouldRetryTextGeneration(error: Error, attempt: number) {
-  if (attempt > 0) return false;
-  return [
-    '超时',
-    'JSON',
-    '结构不完整',
-    'Unterminated string',
-    'Unexpected token',
-    'Unexpected end',
-    '请求失败',
-  ].some((keyword) => error.message.includes(keyword));
+  void error;
+  void attempt;
+  return false;
 }
 
 function extractFirstJsonObject(text: string) {
