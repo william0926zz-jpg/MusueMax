@@ -1341,7 +1341,14 @@ function App() {
       setPublishMessage(t(language, '任务序列已生成，可以检查后发布活动。', 'The mission sequence is ready. Review it and publish when you are happy.'));
     } catch (error) {
       if (generationRequestIdRef.current !== requestId) return;
-      setPublishMessage(error instanceof Error ? error.message : t(language, 'AI 文本生成失败，已使用本地模板。', 'AI text generation failed. The local fallback has been used.'));
+      if (generationRequestIdRef.current !== requestId) return;
+      setActivity({ ...nextActivity });
+      setMissionsReadySignature(currentGenerationSignature);
+      setPublishMessage(
+        error instanceof Error
+          ? `${error.message} ${t(language, '已自动保留本地任务草稿，你可以继续检查并直接发布。', 'The local mission draft has been kept automatically. You can review it and publish directly.')}`
+          : t(language, 'AI 文本生成失败，已自动保留本地任务草稿，你可以继续检查并直接发布。', 'AI generation failed, but the local mission draft has been kept automatically. You can review it and publish directly.'),
+      );
     } finally {
       if (generationRequestIdRef.current !== requestId) return;
       setIsGeneratingText(false);
