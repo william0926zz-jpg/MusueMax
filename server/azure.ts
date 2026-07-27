@@ -1,68 +1,10 @@
-import { defineConfig, loadEnv } from 'vite';
-import react from '@vitejs/plugin-react';
+type EnvMap = Record<string, string | undefined>;
 
-export default defineConfig(({ mode }) => {
-  const env = { ...process.env, ...loadEnv(mode, process.cwd(), '') };
-
-  return {
-    plugins: [
-      react(),
-      {
-        name: 'museumax-recognition-api',
-        configureServer(server) {
-          server.middlewares.use('/api/recognize', async (req, res) => {
-            if (req.method !== 'POST') {
-              res.statusCode = 405;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'Method not allowed' }));
-              return;
-            }
-
-            try {
-              const body = await readJsonBody(req, 12 * 1024 * 1024);
-              const result = await recognizeWithAzure(body, env);
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              const message = error instanceof Error ? error.message : '识别服务暂时不可用';
-              res.statusCode = message.includes('Azure') || message.includes('缺少') ? 503 : 400;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: message }));
-            }
-          });
-          server.middlewares.use('/api/generate-text', async (req, res) => {
-            if (req.method !== 'POST') {
-              res.statusCode = 405;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'Method not allowed' }));
-              return;
-            }
-
-            try {
-              const body = await readJsonBody(req, 4 * 1024 * 1024);
-              const result = await generateTextWithAzure(body, env);
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              const message = error instanceof Error ? error.message : '文本生成服务暂时不可用';
-              res.statusCode = message.includes('Azure') || message.includes('缺少') ? 503 : 400;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: message }));
-            }
-          });
-        },
-      },
-    ],
-  };
-});
-
-function readJsonBody(req: NodeJS.ReadableStream, limit: number) {
+export function readJsonBody(req: any, limit: number, invalidFormatMessage: string) {
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     let raw = '';
     req.setEncoding('utf8');
-    req.on('data', (chunk) => {
+    req.on('data', (chunk: string) => {
       raw += chunk;
       if (raw.length > limit) {
         reject(new Error('图片太大，请压缩后再上传。'));
@@ -73,14 +15,14 @@ function readJsonBody(req: NodeJS.ReadableStream, limit: number) {
       try {
         resolve(JSON.parse(raw));
       } catch {
-        reject(new Error('识别请求格式不正确。'));
+        reject(new Error(invalidFormatMessage));
       }
     });
     req.on('error', reject);
   });
 }
 
-async function recognizeWithAzure(body: Record<string, unknown>, env: Record<string, string | undefined>) {
+export async function recognizeWithAzure(body: Record<string, unknown>, env: EnvMap) {
   const endpoint = env.AZURE_OPENAI_ENDPOINT;
   const deployment = env.AZURE_OPENAI_DEPLOYMENT;
   const apiKey = env.AZURE_OPENAI_API_KEY;
@@ -154,12 +96,7 @@ async function recognizeWithAzure(body: Record<string, unknown>, env: Record<str
   };
 }
 
-function shouldRetryWithoutReference(message: unknown) {
-  const text = typeof message === 'string' ? message : '';
-  return text.includes('Error while downloading file') || text.includes('status code: 403') || text.includes('403');
-}
-
-async function generateTextWithAzure(body: Record<string, unknown>, env: Record<string, string | undefined>) {
+export async function generateTextWithAzure(body: Record<string, unknown>, env: EnvMap) {
   const endpoint = env.AZURE_OPENAI_ENDPOINT;
   const deployment = env.AZURE_OPENAI_DEPLOYMENT;
   const apiKey = env.AZURE_OPENAI_API_KEY;
@@ -177,6 +114,11 @@ async function generateTextWithAzure(body: Record<string, unknown>, env: Record<
   }
 
   return requestStructuredText(type, body, endpointUrl, apiKey, deployment, useResponsesApi);
+}
+
+function shouldRetryWithoutReference(message: unknown) {
+  const text = typeof message === 'string' ? message : '';
+  return text.includes('Error while downloading file') || text.includes('status code: 403') || text.includes('403');
 }
 
 async function generateMissionTextInBatches(
@@ -285,16 +227,6 @@ function buildTextGenerationPrompt(type: string, body: Record<string, unknown>) 
       'answer 字段写教师答案摘要，可以出现完整藏品名称；minutes 使用 8-14 的整数。',
       'submission 字段也必须跟随输出语言：中文可写“照片上传 + 简短观察”，英文可写 “Photo upload + short observation”。',
       '控制整体长度，避免卡片过长；不要额外增加分割线、标题、特殊符号。',
-      `输入 JSON：${context}`,
-    ].join('\n');
-  }
-
-  if (type === 'opening_story') {
-    return [
-      '你是 MUSEUMAX 学生端冒险故事作者。请为小队进入博物馆前生成开场故事。',
-      '只返回 JSON，不要 Markdown，格式为 {"paragraphs":["...","..."]}。',
-      '写 2 段，每段 80-140 字，要把小队名、成员角色、博物馆、学习目标和可自由选择任务顺序写进去。',
-      '不要写系统说明，不要写操作教程。',
       `输入 JSON：${context}`,
     ].join('\n');
   }
@@ -477,16 +409,9 @@ function validateTextGenerationPayload(type: string, payload: Record<string, unk
     return payload;
   }
 
-  if (type === 'opening_story' || type === 'final_story') {
+  if (type === 'activity_background' || type === 'final_story') {
     if (!Array.isArray(payload.paragraphs) || payload.paragraphs.length === 0) {
       throw new Error('Azure AI 返回的故事结构不完整。');
-    }
-    return payload;
-  }
-
-  if (type === 'activity_background') {
-    if (!Array.isArray(payload.paragraphs) || payload.paragraphs.length === 0) {
-      throw new Error('Azure AI 返回的背景故事结构不完整。');
     }
     return payload;
   }

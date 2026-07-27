@@ -31,6 +31,17 @@ export const museums: Museum[] = [
     image: 'https://images.unsplash.com/photo-1565060169194-19fabf63012f?auto=format&fit=crop&w=1200&q=80',
   },
   {
+    id: 'cleveland',
+    name: '克利夫兰艺术博物馆',
+    country: '美国',
+    city: '克利夫兰',
+    summary: '开放馆藏数据质量较高，适合快速接入真实艺术品、图片与来源信息。',
+    tags: ['开放馆藏', '艺术史', '全球文明', '真实 API'],
+    image: 'https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&w=1200&q=80',
+    sourceUrl: 'https://www.clevelandart.org/open-access-api',
+    sourceName: 'Cleveland Museum of Art Open Access API',
+  },
+  {
     id: 'louvre',
     name: '卢浮宫博物馆',
     country: '法国',

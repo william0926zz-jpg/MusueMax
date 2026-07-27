@@ -30,6 +30,7 @@ export type Mission = {
   artifactId: string;
   title: string;
   story: string;
+  selfIntro: string;
   requirement: string;
   submission: string;
   hint: string;
@@ -53,6 +54,7 @@ export type Activity = {
   missions: Mission[];
   storyStyle: StoryStyle;
   goal: string;
+  backgroundStory: string[];
 };
 
 export type RecognitionStatus = '完成' | '部分完成' | '未匹配';
