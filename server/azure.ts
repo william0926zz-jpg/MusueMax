@@ -205,7 +205,7 @@ async function requestStructuredText(
       : buildTextChatCompletionsBody(prompt);
 
     try {
-      const data = await requestAzurePayload(endpointUrl, apiKey, responseBody, 12000);
+      const data = await requestAzurePayload(endpointUrl, apiKey, responseBody, 25000);
       const rawContent = extractAzureText(data);
       const parsed = parseAzureJson(rawContent);
       return validateTextGenerationPayload(type, parsed);
@@ -348,7 +348,7 @@ function buildTextChatCompletionsBody(prompt: string) {
       { role: 'user', content: prompt },
     ],
     temperature: 0.75,
-    max_tokens: 2600,
+    max_tokens: 1400,
   };
 }
 
@@ -360,7 +360,7 @@ function buildTextResponsesBody(model: string, prompt: string) {
       { role: 'user', content: prompt },
     ],
     temperature: 0.75,
-    max_output_tokens: 2600,
+    max_output_tokens: 1400,
   };
 }
 
