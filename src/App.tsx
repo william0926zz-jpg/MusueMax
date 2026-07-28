@@ -1052,9 +1052,11 @@ function App() {
   const [isRecognizing, setIsRecognizing] = useState(false);
   const [isGeneratingText, setIsGeneratingText] = useState(false);
   const [generationStage, setGenerationStage] = useState<'idle' | 'background' | 'missions'>('idle');
+  const [generatingMissionId, setGeneratingMissionId] = useState('');
   const [publishMessage, setPublishMessage] = useState('');
   const [backgroundReadySignature, setBackgroundReadySignature] = useState('');
   const [missionsReadySignature, setMissionsReadySignature] = useState('');
+  const [generatedMissionIds, setGeneratedMissionIds] = useState<string[]>([]);
   const generationRequestIdRef = useRef(0);
 
   const filteredMuseums = useMemo(() => {
@@ -1272,7 +1274,9 @@ function App() {
     setTeacherStep(2);
     setIsGeneratingText(true);
     setGenerationStage('background');
+    setGeneratingMissionId('');
     setMissionsReadySignature('');
+    setGeneratedMissionIds([]);
     setPublishMessage(t(language, '正在生成整场冒险的背景故事...', 'Generating the adventure prologue...'));
     try {
       const background = await generateActivityBackgroundWithAzure(
@@ -1353,6 +1357,73 @@ function App() {
       if (generationRequestIdRef.current !== requestId) return;
       setIsGeneratingText(false);
       setGenerationStage('idle');
+    }
+  }
+
+  async function generateSingleMissionCard(missionId: string) {
+    if (!canGenerateFromSelection || !hasReadyBackgroundForCurrentConfig) return;
+    const missionIndex = activity.missions.findIndex((mission) => mission.id === missionId);
+    if (missionIndex === -1) return;
+    const artifact = selectedArtifacts[missionIndex];
+    const fallbackMission = activity.missions[missionIndex];
+    if (!artifact || !fallbackMission) return;
+
+    const requestId = generationRequestIdRef.current + 1;
+    generationRequestIdRef.current = requestId;
+    const nextActivity = buildPreviewActivity(missionVariant || 1, activity.code);
+    nextActivity.backgroundStory = activity.backgroundStory;
+    nextActivity.missions = [...activity.missions];
+    setActivity(nextActivity);
+    setTeacherStep(2);
+    setIsGeneratingText(true);
+    setGenerationStage('missions');
+    setGeneratingMissionId(missionId);
+    setPublishMessage(t(language, '正在逐张生成任务卡...', 'Generating this mission card...'));
+
+    try {
+      const generated = await generateMissionDraftsWithAzure(
+        selectedMuseum,
+        [artifact],
+        storyStyle,
+        subject,
+        grade,
+        duration,
+        goal,
+        teamCount,
+        missionVariant || 1,
+        activeTheme,
+        nextActivity.backgroundStory,
+        language,
+      );
+      const normalizedMission = normalizeGeneratedMissions(generated, [fallbackMission])[0] ?? fallbackMission;
+      nextActivity.missions[missionIndex] = normalizedMission;
+      if (generationRequestIdRef.current !== requestId) return;
+      setActivity({ ...nextActivity });
+      const nextGeneratedIds = Array.from(new Set([...generatedMissionIds, missionId]));
+      setGeneratedMissionIds(nextGeneratedIds);
+      if (nextGeneratedIds.length === nextActivity.missions.length) {
+        setMissionsReadySignature(currentGenerationSignature);
+      }
+      setPublishMessage(t(language, '这张任务卡已经更新，你可以继续生成下一张。', 'This mission card is ready. You can continue with the next one.'));
+    } catch (error) {
+      if (generationRequestIdRef.current !== requestId) return;
+      nextActivity.missions[missionIndex] = fallbackMission;
+      setActivity({ ...nextActivity });
+      const nextGeneratedIds = Array.from(new Set([...generatedMissionIds, missionId]));
+      setGeneratedMissionIds(nextGeneratedIds);
+      if (nextGeneratedIds.length === nextActivity.missions.length) {
+        setMissionsReadySignature(currentGenerationSignature);
+      }
+      setPublishMessage(
+        error instanceof Error
+          ? `${error.message} ${t(language, '这张卡片已保留本地草稿，你可以继续生成下一张。', 'This card has kept its local draft, and you can continue with the next one.')}`
+          : t(language, 'AI 生成失败，这张卡片已保留本地草稿，你可以继续生成下一张。', 'AI generation failed. This card has kept its local draft, and you can continue with the next one.'),
+      );
+    } finally {
+      if (generationRequestIdRef.current !== requestId) return;
+      setIsGeneratingText(false);
+      setGenerationStage('idle');
+      setGeneratingMissionId('');
     }
   }
 
@@ -1600,6 +1671,7 @@ function App() {
                 onClearArtifactSelection={clearArtifactSelection}
                 onGenerateBackground={generateBackgroundStory}
                 onGenerateMissions={generateMissionSequence}
+                onGenerateSingleMission={generateSingleMissionCard}
                 onPublishActivity={publishActivity}
                 onCopyPublishLink={copyPublishLink}
                 onExportReport={exportReport}
@@ -1610,6 +1682,8 @@ function App() {
                 missionVariant={missionVariant}
                 isGeneratingText={isGeneratingText}
                 generationStage={generationStage}
+                generatingMissionId={generatingMissionId}
+                generatedMissionIds={generatedMissionIds}
                 hasReadyBackgroundForCurrentConfig={hasReadyBackgroundForCurrentConfig}
                 hasReadyMissionsForCurrentConfig={hasReadyMissionsForCurrentConfig}
                 activeTheme={activeTheme}
@@ -1825,6 +1899,7 @@ type TeacherWorkspaceProps = {
   onClearArtifactSelection: () => void;
   onGenerateBackground: () => void;
   onGenerateMissions: () => void;
+  onGenerateSingleMission: (missionId: string) => void;
   onPublishActivity: () => void;
   onCopyPublishLink: () => void;
   onExportReport: () => void;
@@ -1835,6 +1910,8 @@ type TeacherWorkspaceProps = {
   missionVariant: number;
   isGeneratingText: boolean;
   generationStage: 'idle' | 'background' | 'missions';
+  generatingMissionId: string;
+  generatedMissionIds: string[];
   hasReadyBackgroundForCurrentConfig: boolean;
   hasReadyMissionsForCurrentConfig: boolean;
   activeTheme: ThemeKey;
@@ -2418,7 +2495,8 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
   const hasRenderablePreview = previewMissions.some((mission) => mission.story.trim() || mission.requirement.trim() || mission.hint.trim());
   const hasBackgroundStory = props.activity.backgroundStory.some((paragraph) => paragraph.trim());
   const isGeneratingBackground = props.isGeneratingText && props.generationStage === 'background';
-  const isGeneratingMissions = props.isGeneratingText && props.generationStage === 'missions';
+  const generatedMissionSet = new Set(props.generatedMissionIds);
+  const readyMissionCount = previewMissions.filter((mission) => generatedMissionSet.has(mission.id)).length;
   const feedbackClassName = props.publishMessage
     ? isGenerationFeedbackError(props.publishMessage)
       ? 'inline-alert'
@@ -2464,25 +2542,20 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
                 ? t(props.language, '重新生成背景故事', 'Regenerate Prologue')
                 : t(props.language, '先生成背景故事', 'Generate Prologue First')}
           </button>
-          <button className="primary-button full" onClick={props.onGenerateMissions} disabled={props.isGeneratingText || !props.hasReadyBackgroundForCurrentConfig}>
-            <Sparkles size={18} /> {isGeneratingMissions
-              ? t(props.language, '任务生成中', 'Generating Missions')
-              : t(props.language, '再生成任务序列', 'Generate Mission Sequence')}
-          </button>
         </div>
         <div className="microcopy">
           {props.hasReadyBackgroundForCurrentConfig
             ? props.hasReadyMissionsForCurrentConfig
-              ? t(props.language, '当前参数下的背景故事和任务序列都已经生成，可继续微调或直接发布。', 'The current prologue and mission sequence are ready. You can refine them or publish now.')
-              : t(props.language, '背景故事已经准备好。下一步再生成任务序列，能显著降低线上超时风险。', 'The prologue is ready. Generating missions as a second step greatly reduces deployment timeout risk.')
-            : t(props.language, '先生成这一轮的背景故事，再用它去驱动任务卡生成。', 'Generate the prologue first, then use it to drive the mission cards.')}
+              ? t(props.language, '当前参数下的背景故事和任务卡都已准备好，可继续微调或直接发布。', 'The current prologue and mission cards are ready. You can refine them or publish now.')
+              : t(props.language, '背景故事已经准备好。现在请在右侧逐张生成任务卡。', 'The prologue is ready. Generate mission cards one by one on the right.')
+            : t(props.language, '先生成这一轮的背景故事，再到右侧逐张生成任务卡。', 'Generate the prologue first, then create mission cards one by one on the right.')}
         </div>
         {props.publishMessage && <div className={feedbackClassName}>{props.publishMessage}</div>}
       </section>
       <section className="panel mission-list">
         <div className="section-heading">
           <span><BookOpen size={20} /> {t(props.language, '任务卡预览', 'Mission Preview')}</span>
-          <small>{props.language === 'zh' ? `${previewMissions.length} 个关卡 · 预计 ${previewMissions.reduce((sum, mission) => sum + mission.minutes, 0)} 分钟` : `${previewMissions.length} missions · about ${previewMissions.reduce((sum, mission) => sum + mission.minutes, 0)} min`}</small>
+          <small>{props.language === 'zh' ? `${previewMissions.length} 个关卡 · 已生成 ${readyMissionCount} 张` : `${previewMissions.length} missions · ${readyMissionCount} ready`}</small>
         </div>
         {hasBackgroundStory && (
           <article className="mission-card background-card">
@@ -2491,33 +2564,55 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
             {props.activity.backgroundStory.map((paragraph, index) => <p key={`background-${index}`}>{paragraph}</p>)}
           </article>
         )}
-        {!hasRenderablePreview ? (
+        {!previewMissions.length ? (
           <div className={props.isGeneratingText ? 'inline-status loading' : feedbackClassName || 'inline-status'}>
             {props.isGeneratingText
-              ? t(props.language, 'AI 正在先生成背景，再为每件展品生成完整任务内容，请稍候。', 'AI is generating the background first, then complete mission content for each artifact. Please wait.')
+              ? t(props.language, 'AI 正在生成背景故事，请稍候。', 'AI is generating the prologue. Please wait.')
               : isGenerationFeedbackError(props.publishMessage)
-                ? t(props.language, '这一轮没有生成出可展示的任务内容，请再次点击“生成任务序列”。', 'No previewable mission content was generated this round. Please click "Generate Missions" again.')
-                : t(props.language, '点击“生成任务序列”后，这里会显示完整任务卡。', 'Mission cards will appear here after you click "Generate Missions".')}
+                ? t(props.language, '这一轮还没有可展示的任务卡，请先生成背景故事。', 'There are no previewable mission cards yet. Generate the prologue first.')
+                : t(props.language, '生成背景故事后，这里会出现逐张生成的任务卡。', 'Mission cards will appear here after the prologue is generated.')}
           </div>
         ) : (
           <>
             {previewMissions.map((mission) => (
               <article className="mission-card" key={mission.id}>
                 <h3>{mission.title}</h3>
-                <p>{mission.story}</p>
-                <dl>
-                  <div><dt>{t(props.language, '文物自述', 'Artifact Voice')}</dt><dd>{mission.selfIntro}</dd></div>
-                  <div><dt>{t(props.language, '学生任务', 'Student Task')}</dt><dd>{mission.requirement}</dd></div>
-                  <div><dt>{t(props.language, '提交', 'Submission')}</dt><dd>{mission.submission}</dd></div>
-                  <div><dt>{t(props.language, '谜题线索', 'Clues')}</dt><dd>{mission.hint}</dd></div>
-                  <div><dt>{t(props.language, '教师提示', 'Teacher Note')}</dt><dd>{mission.teacherNote}</dd></div>
-                  <div><dt>{t(props.language, '教师答案', 'Teacher Answer')}</dt><dd>{mission.answer}</dd></div>
-                </dl>
+                {generatedMissionSet.has(mission.id) ? (
+                  <>
+                    <p>{mission.story}</p>
+                    <dl>
+                      <div><dt>{t(props.language, '文物自述', 'Artifact Voice')}</dt><dd>{mission.selfIntro}</dd></div>
+                      <div><dt>{t(props.language, '学生任务', 'Student Task')}</dt><dd>{mission.requirement}</dd></div>
+                      <div><dt>{t(props.language, '提交', 'Submission')}</dt><dd>{mission.submission}</dd></div>
+                      <div><dt>{t(props.language, '谜题线索', 'Clues')}</dt><dd>{mission.hint}</dd></div>
+                      <div><dt>{t(props.language, '教师提示', 'Teacher Note')}</dt><dd>{mission.teacherNote}</dd></div>
+                      <div><dt>{t(props.language, '教师答案', 'Teacher Answer')}</dt><dd>{mission.answer}</dd></div>
+                    </dl>
+                  </>
+                ) : (
+                  <div className="mission-card-empty">
+                    <p>{t(props.language, '这张任务卡还没有生成。点击下方按钮后，再为这一件展品单独生成。', 'This mission card has not been generated yet. Use the button below to create it for this artifact only.')}</p>
+                  </div>
+                )}
+                <div className="mission-card-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => props.onGenerateSingleMission(mission.id)}
+                    disabled={props.isGeneratingText || !props.hasReadyBackgroundForCurrentConfig}
+                  >
+                    <Sparkles size={18} />
+                    {props.generatingMissionId === mission.id
+                      ? t(props.language, '生成中', 'Generating')
+                      : generatedMissionSet.has(mission.id)
+                        ? t(props.language, '重新生成这张卡', 'Regenerate This Card')
+                        : t(props.language, '生成这张任务卡', 'Generate This Card')}
+                  </button>
+                </div>
               </article>
             ))}
           </>
         )}
-        <button className="primary-button" onClick={props.onPublishActivity} disabled={!hasRenderablePreview || props.isGeneratingText}><Send size={18} /> {t(props.language, '发布活动', 'Publish Activity')}</button>
+        <button className="primary-button" onClick={props.onPublishActivity} disabled={!readyMissionCount || props.isGeneratingText}><Send size={18} /> {t(props.language, '发布活动', 'Publish Activity')}</button>
       </section>
     </div>
   );

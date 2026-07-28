@@ -943,6 +943,25 @@ button {
   line-height: 1.6;
 }
 
+.mission-card-empty {
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px dashed var(--theme-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--theme-surface-strong) 76%, transparent);
+}
+
+.mission-card-empty p {
+  margin: 0;
+  color: var(--theme-muted);
+}
+
+.mission-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .action-row { display: flex; justify-content: flex-end; margin-top: 18px; gap: 10px; }
 .action-row.center { justify-content: center; }
 
