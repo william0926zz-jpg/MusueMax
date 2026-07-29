@@ -113,6 +113,9 @@ type ActivityHistoryEntry = {
   activeTheme: ThemeKey;
 };
 
+type TeamMissionCompletionMap = Record<number, string[]>;
+type TeamMissionCompleterMap = Record<number, Record<string, string>>;
+
 type AppRoute = 'home' | 'teacher' | 'student';
 
 function getRouteFromPath(): AppRoute {
@@ -1044,8 +1047,8 @@ function App() {
   const [studentTeamName, setStudentTeamName] = useState(getDefaultTeamName(0));
   const [teamMembers, setTeamMembers] = useState<StudentTeamMember[]>([]);
   const [activeMissionIndex, setActiveMissionIndex] = useState(0);
-  const [completedMissions, setCompletedMissions] = useState<string[]>([]);
-  const [missionCompletions, setMissionCompletions] = useState<Record<string, string>>({});
+  const [completedMissionsByTeam, setCompletedMissionsByTeam] = useState<TeamMissionCompletionMap>({});
+  const [missionCompletionsByTeam, setMissionCompletionsByTeam] = useState<TeamMissionCompleterMap>({});
   const [recognition, setRecognition] = useState<RecognitionResult | null>(null);
   const [uploadedName, setUploadedName] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -1072,7 +1075,6 @@ function App() {
 
   const missions = activity.missions;
   const currentMission = missions[activeMissionIndex] ?? missions[0];
-  const progress = Math.round((completedMissions.length / missions.length) * 100);
   const selectedArtifacts = useMemo(
     () => artifacts.filter((artifact) => selectedArtifactIds.includes(artifact.id)),
     [artifacts, selectedArtifactIds],
@@ -1084,6 +1086,17 @@ function App() {
   );
   const hasReadyBackgroundForCurrentConfig = backgroundReadySignature === currentGenerationSignature;
   const hasReadyMissionsForCurrentConfig = missionsReadySignature === currentGenerationSignature;
+  const completedMissions = completedMissionsByTeam[selectedTeamIndex] ?? [];
+  const missionCompletions = missionCompletionsByTeam[selectedTeamIndex] ?? {};
+  const progress = Math.round((completedMissions.length / Math.max(missions.length, 1)) * 100);
+  const overallCompletedMissions = useMemo(
+    () => Array.from(new Set(Object.values(completedMissionsByTeam).flatMap((teamMissions) => teamMissions))),
+    [completedMissionsByTeam],
+  );
+  const overallMissionCompletions = useMemo(
+    () => Object.assign({}, ...Object.values(missionCompletionsByTeam)),
+    [missionCompletionsByTeam],
+  );
 
   useEffect(() => {
     document.body.classList.remove('theme-classic', 'theme-night', 'theme-future', 'theme-paper');
@@ -1460,8 +1473,9 @@ function App() {
     setSelectedTeamIndex(0);
     setStudentTeamName(getDefaultTeamName(0));
     setActiveMissionIndex(0);
-    setCompletedMissions([]);
-    setMissionCompletions({});
+    setCompletedMissionsByTeam({});
+    setMissionCompletionsByTeam({});
+    setTeamMembers([]);
     setTeacherStep(3);
   }
 
@@ -1543,10 +1557,16 @@ function App() {
       setRecognition(nextResult);
       setStudentStep(5);
       if (result.matched) {
-        setCompletedMissions((items) => [...new Set([...items, currentMission.id])]);
-        setMissionCompletions((items) => ({
+        setCompletedMissionsByTeam((items) => ({
           ...items,
-          [currentMission.id]: studentName.trim() || studentTeamName,
+          [selectedTeamIndex]: [...new Set([...(items[selectedTeamIndex] ?? []), currentMission.id])],
+        }));
+        setMissionCompletionsByTeam((items) => ({
+          ...items,
+          [selectedTeamIndex]: {
+            ...(items[selectedTeamIndex] ?? {}),
+            [currentMission.id]: studentName.trim() || studentTeamName,
+          },
         }));
       }
     } catch (error) {
@@ -1572,10 +1592,16 @@ function App() {
   function completeAllMissionsForTest() {
     const completer = studentName.trim() || 'L';
     const allMissionIds = activity.missions.map((mission) => mission.id);
-    setCompletedMissions(allMissionIds);
-    setMissionCompletions((items) => ({
+    setCompletedMissionsByTeam((items) => ({
       ...items,
-      ...Object.fromEntries(allMissionIds.map((missionId) => [missionId, completer])),
+      [selectedTeamIndex]: allMissionIds,
+    }));
+    setMissionCompletionsByTeam((items) => ({
+      ...items,
+      [selectedTeamIndex]: {
+        ...(items[selectedTeamIndex] ?? {}),
+        ...Object.fromEntries(allMissionIds.map((missionId) => [missionId, completer])),
+      },
     }));
     setRecognition(null);
     setUploadedName('');
@@ -1623,7 +1649,7 @@ function App() {
 
   function exportReport() {
     const filename = `${activity.code}-report.html`;
-    downloadFile(filename, buildReportHtml(activity, teamMembers, completedMissions, missionCompletions), 'text/html;charset=utf-8');
+    downloadFile(filename, buildReportHtml(activity, teamMembers, overallCompletedMissions, overallMissionCompletions), 'text/html;charset=utf-8');
     setPublishMessage(t(language, '已导出可打印的课后复盘报告，可在浏览器中打开后另存为 PDF。', 'A printable review report has been exported. Open it in the browser and save it as PDF if needed.'));
   }
 
@@ -1692,8 +1718,8 @@ function App() {
                 onExportReport={exportReport}
                 publishMessage={publishMessage}
                 teamMembers={teamMembers}
-                completedMissions={completedMissions}
-                missionCompletions={missionCompletions}
+                completedMissions={overallCompletedMissions}
+                missionCompletions={overallMissionCompletions}
                 missionVariant={missionVariant}
                 isGeneratingText={isGeneratingText}
                 generationStage={generationStage}
