@@ -1429,7 +1429,22 @@ function App() {
 
   function publishActivity() {
     if (!canGenerateFromSelection) return;
-    const nextActivity = createActivity(selectedMuseum, selectedArtifacts, storyStyle, subject, grade, duration, goal, teamCount, generateActivityCode(), missionVariant, activeTheme, language);
+    const nextActivity = {
+      ...activity,
+      code: generateActivityCode(),
+      name: `${selectedMuseum.name}时光探险课`,
+      className: `${grade}研学 1 班`,
+      grade,
+      subject,
+      duration,
+      teamCount,
+      museum: selectedMuseum,
+      artifacts: selectedArtifacts,
+      storyStyle,
+      goal,
+      backgroundStory: [...activity.backgroundStory],
+      missions: activity.missions.map((mission) => ({ ...mission })),
+    };
     setActivity(nextActivity);
     setActivityHistory((items) => [
       {
