@@ -124,6 +124,14 @@ type MissionSubmissionRecord = {
   completedAt: string;
 };
 type TeamMissionSubmissionMap = Record<number, Record<string, MissionSubmissionRecord>>;
+type TeamProgressSummary = {
+  teamIndex: number;
+  teamName: string;
+  completedCount: number;
+  totalCount: number;
+  completionRate: number;
+  memberCount: number;
+};
 
 type AppRoute = 'home' | 'teacher' | 'student';
 
@@ -1096,18 +1104,38 @@ function App() {
   );
   const hasReadyBackgroundForCurrentConfig = backgroundReadySignature === currentGenerationSignature;
   const hasReadyMissionsForCurrentConfig = missionsReadySignature === currentGenerationSignature;
-  const completedMissions = completedMissionsByTeam[selectedTeamIndex] ?? [];
+  const currentMissionIdSet = useMemo(() => new Set(missions.map((mission) => mission.id)), [missions]);
+  const completedMissions = useMemo(
+    () => Array.from(new Set((completedMissionsByTeam[selectedTeamIndex] ?? []).filter((missionId) => currentMissionIdSet.has(missionId)))),
+    [completedMissionsByTeam, selectedTeamIndex, currentMissionIdSet],
+  );
   const missionCompletions = missionCompletionsByTeam[selectedTeamIndex] ?? {};
   const missionSubmissions = missionSubmissionsByTeam[selectedTeamIndex] ?? {};
-  const progress = Math.round((completedMissions.length / Math.max(missions.length, 1)) * 100);
+  const progress = Math.min(100, Math.round((completedMissions.length / Math.max(missions.length, 1)) * 100));
   const overallCompletedMissions = useMemo(
-    () => Array.from(new Set(Object.values(completedMissionsByTeam).flatMap((teamMissions) => teamMissions))),
-    [completedMissionsByTeam],
+    () => Array.from(new Set(Object.values(completedMissionsByTeam).flatMap((teamMissions) => teamMissions).filter((missionId) => currentMissionIdSet.has(missionId)))),
+    [completedMissionsByTeam, currentMissionIdSet],
   );
   const overallMissionCompletions = useMemo(
     () => Object.assign({}, ...Object.values(missionCompletionsByTeam)),
     [missionCompletionsByTeam],
   );
+  const teamProgressSummaries = useMemo<TeamProgressSummary[]>(() => (
+    Array.from({ length: activity.teamCount }, (_, teamIndex) => {
+      const teamMissionIds = Array.from(new Set((completedMissionsByTeam[teamIndex] ?? []).filter((missionId) => currentMissionIdSet.has(missionId))));
+      const members = teamMembers.filter((member) => member.teamIndex === teamIndex);
+      const customTeamName = members.find((member) => member.teamName)?.teamName;
+      const totalCount = Math.max(missions.length, 1);
+      return {
+        teamIndex,
+        teamName: customTeamName || getDefaultTeamName(teamIndex),
+        completedCount: teamMissionIds.length,
+        totalCount: missions.length,
+        completionRate: Math.min(100, Math.round((teamMissionIds.length / totalCount) * 100)),
+        memberCount: members.length,
+      };
+    })
+  ), [activity.teamCount, completedMissionsByTeam, currentMissionIdSet, missions.length, teamMembers]);
 
   useEffect(() => {
     document.body.classList.remove('theme-classic', 'theme-night', 'theme-future', 'theme-paper');
@@ -1765,6 +1793,7 @@ function App() {
                 teamMembers={teamMembers}
                 completedMissions={overallCompletedMissions}
                 missionCompletions={overallMissionCompletions}
+                teamProgressSummaries={teamProgressSummaries}
                 missionVariant={missionVariant}
                 isGeneratingText={isGeneratingText}
                 generationStage={generationStage}
@@ -1994,6 +2023,7 @@ type TeacherWorkspaceProps = {
   teamMembers: StudentTeamMember[];
   completedMissions: string[];
   missionCompletions: Record<string, string>;
+  teamProgressSummaries: TeamProgressSummary[];
   missionVariant: number;
   isGeneratingText: boolean;
   generationStage: 'idle' | 'background' | 'missions';
@@ -2706,8 +2736,11 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
 }
 
 function PublishAndReport(props: TeacherWorkspaceProps) {
-  const completionRate = props.activity.missions.length > 0 ? Math.round((props.completedMissions.length / props.activity.missions.length) * 100) : 0;
-  const teamNames = Array.from(new Set(props.teamMembers.map((member) => member.teamName)));
+  const visibleTeamSummaries = props.teamProgressSummaries.filter((team) => team.memberCount > 0 || team.completedCount > 0);
+  const completionRate = visibleTeamSummaries.length > 0
+    ? Math.round(visibleTeamSummaries.reduce((sum, team) => sum + team.completionRate, 0) / visibleTeamSummaries.length)
+    : 0;
+  const successfulMatches = visibleTeamSummaries.reduce((sum, team) => sum + team.completedCount, 0);
 
   return (
     <div className="screen-grid two-columns">
@@ -2737,13 +2770,20 @@ function PublishAndReport(props: TeacherWorkspaceProps) {
         <div className="summary-grid">
           <Metric label={t(props.language, '班级完成率', 'Completion Rate')} value={`${completionRate}%`} />
           <Metric label={t(props.language, '参与人数', 'Participants')} value={`${props.teamMembers.length}`} />
-          <Metric label={t(props.language, '识别成功', 'Successful Matches')} value={`${props.completedMissions.length}`} />
+          <Metric label={t(props.language, '识别成功', 'Successful Matches')} value={`${successfulMatches}`} />
           <Metric label={t(props.language, '人工判定', 'Manual Review')} value="0" />
         </div>
         <div className="rank-list">
-          {(teamNames.length > 0 ? teamNames : [t(props.language, '暂无小队数据', 'No team data yet')]).map((team, index) => (
-            <div key={team}><strong>{index + 1}. {team}</strong><span>{teamNames.length > 0 ? (props.language === 'zh' ? `${Math.max(0, completionRate - index * 5)} 分` : `${Math.max(0, completionRate - index * 5)} pts`) : t(props.language, '待生成', 'Pending')}</span></div>
-          ))}
+          {visibleTeamSummaries.length > 0 ? (
+            visibleTeamSummaries.map((team) => (
+              <div key={team.teamIndex}>
+                <strong>{props.language === 'zh' ? `第 ${team.teamIndex + 1} 小队 · ${team.teamName}` : `Team ${team.teamIndex + 1} · ${team.teamName}`}</strong>
+                <span>{props.language === 'zh' ? `${team.completedCount}/${team.totalCount} · ${team.completionRate}%` : `${team.completedCount}/${team.totalCount} · ${team.completionRate}%`}</span>
+              </div>
+            ))
+          ) : (
+            <div><strong>{t(props.language, '暂无小队数据', 'No team data yet')}</strong><span>{t(props.language, '待生成', 'Pending')}</span></div>
+          )}
         </div>
         <div className="published-list-block">
           <small>{t(props.language, '最近发布', 'Recently Published')}</small>
