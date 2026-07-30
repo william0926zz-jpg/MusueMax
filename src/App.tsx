@@ -115,6 +115,15 @@ type ActivityHistoryEntry = {
 
 type TeamMissionCompletionMap = Record<number, string[]>;
 type TeamMissionCompleterMap = Record<number, Record<string, string>>;
+type MissionSubmissionRecord = {
+  completer: string;
+  uploadedName: string;
+  detectedName: string;
+  confidence: number;
+  feedback: string;
+  completedAt: string;
+};
+type TeamMissionSubmissionMap = Record<number, Record<string, MissionSubmissionRecord>>;
 
 type AppRoute = 'home' | 'teacher' | 'student';
 
@@ -1049,6 +1058,7 @@ function App() {
   const [activeMissionIndex, setActiveMissionIndex] = useState(0);
   const [completedMissionsByTeam, setCompletedMissionsByTeam] = useState<TeamMissionCompletionMap>({});
   const [missionCompletionsByTeam, setMissionCompletionsByTeam] = useState<TeamMissionCompleterMap>({});
+  const [missionSubmissionsByTeam, setMissionSubmissionsByTeam] = useState<TeamMissionSubmissionMap>({});
   const [recognition, setRecognition] = useState<RecognitionResult | null>(null);
   const [uploadedName, setUploadedName] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -1088,6 +1098,7 @@ function App() {
   const hasReadyMissionsForCurrentConfig = missionsReadySignature === currentGenerationSignature;
   const completedMissions = completedMissionsByTeam[selectedTeamIndex] ?? [];
   const missionCompletions = missionCompletionsByTeam[selectedTeamIndex] ?? {};
+  const missionSubmissions = missionSubmissionsByTeam[selectedTeamIndex] ?? {};
   const progress = Math.round((completedMissions.length / Math.max(missions.length, 1)) * 100);
   const overallCompletedMissions = useMemo(
     () => Array.from(new Set(Object.values(completedMissionsByTeam).flatMap((teamMissions) => teamMissions))),
@@ -1475,6 +1486,7 @@ function App() {
     setActiveMissionIndex(0);
     setCompletedMissionsByTeam({});
     setMissionCompletionsByTeam({});
+    setMissionSubmissionsByTeam({});
     setTeamMembers([]);
     setTeacherStep(3);
   }
@@ -1518,6 +1530,7 @@ function App() {
 
   async function submitRecognition() {
     if (!uploadedFile || isRecognizing) return;
+    if (missionSubmissions[currentMission.id] || completedMissions.includes(currentMission.id)) return;
     const targetArtifact = activity.artifacts.find((artifact) => artifact.id === currentMission.artifactId);
     if (!targetArtifact) return;
 
@@ -1557,6 +1570,7 @@ function App() {
       setRecognition(nextResult);
       setStudentStep(5);
       if (result.matched) {
+        const completer = studentName.trim() || studentTeamName;
         setCompletedMissionsByTeam((items) => ({
           ...items,
           [selectedTeamIndex]: [...new Set([...(items[selectedTeamIndex] ?? []), currentMission.id])],
@@ -1565,7 +1579,21 @@ function App() {
           ...items,
           [selectedTeamIndex]: {
             ...(items[selectedTeamIndex] ?? {}),
-            [currentMission.id]: studentName.trim() || studentTeamName,
+            [currentMission.id]: completer,
+          },
+        }));
+        setMissionSubmissionsByTeam((items) => ({
+          ...items,
+          [selectedTeamIndex]: {
+            ...(items[selectedTeamIndex] ?? {}),
+            [currentMission.id]: {
+              completer,
+              uploadedName: uploadedFile.name,
+              detectedName,
+              confidence: matchConfidence,
+              feedback: nextResult.feedback,
+              completedAt: new Date().toISOString(),
+            },
           },
         }));
       }
@@ -1601,6 +1629,23 @@ function App() {
       [selectedTeamIndex]: {
         ...(items[selectedTeamIndex] ?? {}),
         ...Object.fromEntries(allMissionIds.map((missionId) => [missionId, completer])),
+      },
+    }));
+    setMissionSubmissionsByTeam((items) => ({
+      ...items,
+      [selectedTeamIndex]: {
+        ...(items[selectedTeamIndex] ?? {}),
+        ...Object.fromEntries(allMissionIds.map((missionId) => [
+          missionId,
+          {
+            completer,
+            uploadedName: '测试直达成果',
+            detectedName: activity.missions.find((mission) => mission.id === missionId)?.title ?? '测试任务',
+            confidence: 1,
+            feedback: '测试模式已标记该任务完成。',
+            completedAt: new Date().toISOString(),
+          },
+        ])),
       },
     }));
     setRecognition(null);
@@ -1764,6 +1809,7 @@ function App() {
           setActiveMissionIndex={setActiveMissionIndex}
           completedMissions={completedMissions}
           missionCompletions={missionCompletions}
+          missionSubmissions={missionSubmissions}
           progress={progress}
           recognition={recognition}
           uploadedName={uploadedName}
@@ -2741,6 +2787,7 @@ type StudentWorkspaceProps = {
   setActiveMissionIndex: (index: number) => void;
   completedMissions: string[];
   missionCompletions: Record<string, string>;
+  missionSubmissions: Record<string, MissionSubmissionRecord>;
   progress: number;
   recognition: RecognitionResult | null;
   uploadedName: string;
@@ -2918,6 +2965,19 @@ function StudentDashboard(props: StudentWorkspaceProps) {
 }
 
 function MissionDetail(props: StudentWorkspaceProps) {
+  const completedBy = props.missionCompletions[props.currentMission.id];
+  const existingSubmission = props.missionSubmissions[props.currentMission.id] ?? (
+    props.completedMissions.includes(props.currentMission.id)
+      ? {
+          completer: completedBy || props.studentTeamName,
+          uploadedName: t(props.language, '已提交照片', 'Submitted photo'),
+          detectedName: t(props.language, '已完成识别', 'Recognition completed'),
+          confidence: 1,
+          feedback: t(props.language, '该任务已由本队完成，结果已锁定。', 'This mission has already been completed by your team, and the result is locked.'),
+          completedAt: new Date().toISOString(),
+        }
+      : undefined
+  );
   return (
     <section className="mission-detail">
       <article className="panel detail-copy">
@@ -2934,15 +2994,30 @@ function MissionDetail(props: StudentWorkspaceProps) {
         <div className="hint-box"><ShieldCheck size={18} /> {props.currentMission.hint}</div>
       </article>
       <article className="panel camera-panel">
-        <div className="hint-box"><ShieldCheck size={18} /> {t(props.language, '目标展品不会在任务卡中直接展示。请根据谜面、展厅和展签信息自行定位。', 'The target artifact is not named directly on the card. Use the clues, gallery, and label details to locate it.')}</div>
-        <label className="upload-zone">
-          <ImagePlus size={28} />
-          <span>{props.uploadedName || t(props.language, '选择或拍摄展品照片', 'Choose or take a photo of the artifact')}</span>
-          <input type="file" accept="image/*" capture="environment" onChange={(event) => props.onSelectPhoto(event.target.files?.[0] ?? null)} />
-        </label>
-        <button className="primary-button full" onClick={props.onSubmitPhoto} disabled={!props.uploadedName || props.isRecognizing}>
-          <Camera size={18} /> {props.isRecognizing ? t(props.language, 'AI 识别中', 'AI Matching') : t(props.language, '提交识别', 'Submit Photo')}
-        </button>
+        {existingSubmission ? (
+          <>
+            <div className="hint-box"><ShieldCheck size={18} /> {t(props.language, '这个任务已由本队成员完成，上传结果已锁定。', 'This mission has been completed by your team, and the submission is locked.')}</div>
+            <div className="summary-grid">
+              <Metric label={t(props.language, '完成者', 'Completed By')} value={existingSubmission.completer} />
+              <Metric label={t(props.language, '照片', 'Photo')} value={existingSubmission.uploadedName} />
+              <Metric label={t(props.language, '识别展品', 'Detected Artifact')} value={existingSubmission.detectedName} />
+              <Metric label={t(props.language, '置信度', 'Confidence')} value={`${Math.round(existingSubmission.confidence * 100)}%`} />
+            </div>
+            <p>{existingSubmission.feedback}</p>
+          </>
+        ) : (
+          <>
+            <div className="hint-box"><ShieldCheck size={18} /> {t(props.language, '目标展品不会在任务卡中直接展示。请根据谜面、展厅和展签信息自行定位。', 'The target artifact is not named directly on the card. Use the clues, gallery, and label details to locate it.')}</div>
+            <label className="upload-zone">
+              <ImagePlus size={28} />
+              <span>{props.uploadedName || t(props.language, '选择或拍摄展品照片', 'Choose or take a photo of the artifact')}</span>
+              <input type="file" accept="image/*" capture="environment" onChange={(event) => props.onSelectPhoto(event.target.files?.[0] ?? null)} />
+            </label>
+            <button className="primary-button full" onClick={props.onSubmitPhoto} disabled={!props.uploadedName || props.isRecognizing}>
+              <Camera size={18} /> {props.isRecognizing ? t(props.language, 'AI 识别中', 'AI Matching') : t(props.language, '提交识别', 'Submit Photo')}
+            </button>
+          </>
+        )}
         <button className="ghost-button full" onClick={() => props.setStep(3)}>{t(props.language, '返回任务主页', 'Back To Mission Hub')}</button>
       </article>
     </section>
@@ -2952,6 +3027,7 @@ function MissionDetail(props: StudentWorkspaceProps) {
 function RecognitionPage(props: StudentWorkspaceProps) {
   const result = props.recognition;
   if (!result) return null;
+  const existingSubmission = props.missionSubmissions[props.currentMission.id];
   const canFinish = props.completedMissions.length >= props.activity.missions.length;
   return (
     <section className="panel result-panel">
@@ -2962,7 +3038,7 @@ function RecognitionPage(props: StudentWorkspaceProps) {
       <div className="summary-grid">
         <Metric label={t(props.language, '识别展品', 'Detected Artifact')} value={result.detectedName} />
         <Metric label={t(props.language, '置信度', 'Confidence')} value={`${Math.round(result.confidence * 100)}%`} />
-        <Metric label={t(props.language, '照片', 'Photo')} value={props.uploadedName || t(props.language, '已提交', 'Submitted')} />
+        <Metric label={t(props.language, '照片', 'Photo')} value={existingSubmission?.uploadedName || props.uploadedName || t(props.language, '已提交', 'Submitted')} />
       </div>
       <p>{result.feedback}</p>
       <div className="action-row center">
