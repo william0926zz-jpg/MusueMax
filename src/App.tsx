@@ -24,6 +24,7 @@ import {
   Users,
 } from 'lucide-react';
 import { getArtifactsForMuseum, museums } from './data';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
 import type { Activity, Artifact, Mission, Museum, RecognitionResult, StoryStyle } from './types';
 
 const storyStyles: StoryStyle[] = ['魔幻', '科幻', '历史穿越', '冒险'];
@@ -132,6 +133,28 @@ type TeamProgressSummary = {
   completionRate: number;
   memberCount: number;
 };
+type ActivityDbRow = {
+  code: string;
+  activity: Activity;
+  active_theme: ThemeKey | null;
+};
+type TeamMemberDbRow = {
+  id: string;
+  team_index: number;
+  team_name: string;
+  student_name: string;
+  role: string | null;
+};
+type MissionSubmissionDbRow = {
+  team_index: number;
+  mission_id: string;
+  completer: string;
+  uploaded_name: string;
+  detected_name: string;
+  confidence: number | string;
+  feedback: string;
+  completed_at: string | null;
+};
 
 type AppRoute = 'home' | 'teacher' | 'student';
 
@@ -151,6 +174,49 @@ function loadActivityHistory() {
   } catch {
     return [] as ActivityHistoryEntry[];
   }
+}
+
+function mapTeamMemberRow(row: TeamMemberDbRow): StudentTeamMember {
+  return {
+    id: row.id,
+    name: row.student_name,
+    teamIndex: row.team_index,
+    teamName: row.team_name,
+    role: row.role ?? '',
+  };
+}
+
+function mapSubmissionRow(row: MissionSubmissionDbRow): MissionSubmissionRecord {
+  return {
+    completer: row.completer,
+    uploadedName: row.uploaded_name,
+    detectedName: row.detected_name,
+    confidence: Number(row.confidence ?? 0),
+    feedback: row.feedback,
+    completedAt: row.completed_at ?? new Date().toISOString(),
+  };
+}
+
+function buildSubmissionState(rows: MissionSubmissionDbRow[]) {
+  const completedByTeam: TeamMissionCompletionMap = {};
+  const completersByTeam: TeamMissionCompleterMap = {};
+  const submissionsByTeam: TeamMissionSubmissionMap = {};
+
+  rows.forEach((row) => {
+    const teamIndex = row.team_index;
+    const record = mapSubmissionRow(row);
+    completedByTeam[teamIndex] = [...new Set([...(completedByTeam[teamIndex] ?? []), row.mission_id])];
+    completersByTeam[teamIndex] = {
+      ...(completersByTeam[teamIndex] ?? {}),
+      [row.mission_id]: record.completer,
+    };
+    submissionsByTeam[teamIndex] = {
+      ...(submissionsByTeam[teamIndex] ?? {}),
+      [row.mission_id]: record,
+    };
+  });
+
+  return { completedByTeam, completersByTeam, submissionsByTeam };
 }
 
 function buildMissions(
@@ -1078,6 +1144,7 @@ function App() {
   const [backgroundReadySignature, setBackgroundReadySignature] = useState('');
   const [missionsReadySignature, setMissionsReadySignature] = useState('');
   const [generatedMissionIds, setGeneratedMissionIds] = useState<string[]>([]);
+  const [syncedActivityCode, setSyncedActivityCode] = useState('');
   const generationRequestIdRef = useRef(0);
 
   const filteredMuseums = useMemo(() => {
@@ -1137,6 +1204,59 @@ function App() {
     })
   ), [activity.teamCount, completedMissionsByTeam, currentMissionIdSet, missions.length, teamMembers]);
 
+  function applyRemoteActivity(row: ActivityDbRow) {
+    const remoteActivity = row.activity;
+    setActivity(remoteActivity);
+    if (row.active_theme) setActiveTheme(row.active_theme);
+    setSelectedMuseum(remoteActivity.museum);
+    setArtifacts(remoteActivity.artifacts);
+    setSelectedArtifactIds(remoteActivity.artifacts.map((artifact) => artifact.id));
+    setSubject(remoteActivity.subject);
+    setGrade(remoteActivity.grade);
+    setDuration(remoteActivity.duration);
+    setTeamCount(remoteActivity.teamCount);
+    setStoryStyle(remoteActivity.storyStyle);
+    setGoal(remoteActivity.goal);
+  }
+
+  async function loadRemoteActivityByCode(activityCode: string) {
+    if (!supabase) return false;
+    const { data, error } = await supabase
+      .from('activities')
+      .select('code, activity, active_theme')
+      .eq('code', activityCode)
+      .maybeSingle<ActivityDbRow>();
+    if (error || !data) return false;
+    applyRemoteActivity(data);
+    setSyncedActivityCode(data.code);
+    await syncRemoteActivityState(activityCode);
+    return true;
+  }
+
+  async function syncRemoteActivityState(activityCode: string) {
+    if (!supabase) return;
+    const [membersResult, submissionsResult] = await Promise.all([
+      supabase
+        .from('team_members')
+        .select('id, team_index, team_name, student_name, role')
+        .eq('activity_code', activityCode),
+      supabase
+        .from('mission_submissions')
+        .select('team_index, mission_id, completer, uploaded_name, detected_name, confidence, feedback, completed_at')
+        .eq('activity_code', activityCode),
+    ]);
+
+    if (!membersResult.error && Array.isArray(membersResult.data)) {
+      setTeamMembers((membersResult.data as TeamMemberDbRow[]).map(mapTeamMemberRow));
+    }
+    if (!submissionsResult.error && Array.isArray(submissionsResult.data)) {
+      const nextState = buildSubmissionState(submissionsResult.data as MissionSubmissionDbRow[]);
+      setCompletedMissionsByTeam(nextState.completedByTeam);
+      setMissionCompletionsByTeam(nextState.completersByTeam);
+      setMissionSubmissionsByTeam(nextState.submissionsByTeam);
+    }
+  }
+
   useEffect(() => {
     document.body.classList.remove('theme-classic', 'theme-night', 'theme-future', 'theme-paper');
     document.body.classList.add(`theme-${activeTheme}`);
@@ -1150,6 +1270,30 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem('museumax-activity-history', JSON.stringify(activityHistory.slice(0, 8)));
   }, [activityHistory]);
+
+  useEffect(() => {
+    if (!supabase || !syncedActivityCode) return;
+    const supabaseClient = supabase;
+    void syncRemoteActivityState(syncedActivityCode);
+
+    const channel = supabaseClient
+      .channel(`activity-${syncedActivityCode}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'team_members', filter: `activity_code=eq.${syncedActivityCode}` },
+        () => void syncRemoteActivityState(syncedActivityCode),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mission_submissions', filter: `activity_code=eq.${syncedActivityCode}` },
+        () => void syncRemoteActivityState(syncedActivityCode),
+      )
+      .subscribe();
+
+    return () => {
+      void supabaseClient.removeChannel(channel);
+    };
+  }, [syncedActivityCode]);
 
   useEffect(() => {
     function handlePopState() {
@@ -1479,7 +1623,7 @@ function App() {
     }
   }
 
-  function publishActivity() {
+  async function publishActivity() {
     if (!canGenerateFromSelection) return;
     const nextActivity = {
       ...activity,
@@ -1497,6 +1641,20 @@ function App() {
       backgroundStory: [...activity.backgroundStory],
       missions: activity.missions.map((mission) => ({ ...mission })),
     };
+    let remotePublishError = '';
+    if (supabase) {
+      const { error } = await supabase.from('activities').upsert({
+        code: nextActivity.code,
+        activity: nextActivity,
+        active_theme: activeTheme,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) {
+        remotePublishError = error.message;
+      } else {
+        setSyncedActivityCode(nextActivity.code);
+      }
+    }
     setActivity(nextActivity);
     setActivityHistory((items) => [
       {
@@ -1516,37 +1674,66 @@ function App() {
     setMissionCompletionsByTeam({});
     setMissionSubmissionsByTeam({});
     setTeamMembers([]);
+    setPublishMessage(
+      remotePublishError
+        ? t(language, `活动已本地发布，但云端同步失败：${remotePublishError}`, `Activity was published locally, but cloud sync failed: ${remotePublishError}`)
+        : isSupabaseConfigured
+          ? t(language, '活动已发布并同步到云端。', 'Activity published and synced to the cloud.')
+          : t(language, '活动已本地发布。Supabase 环境变量缺失时，多设备不会同步。', 'Activity published locally. Multi-device sync needs Supabase environment variables.'),
+    );
     setTeacherStep(3);
   }
 
-  function joinActivity() {
-    if (studentName.trim() && studentCode.trim().toUpperCase() === activity.code) {
+  async function joinActivity() {
+    const normalizedCode = studentCode.trim().toUpperCase();
+    if (!studentName.trim() || !normalizedCode) {
+      setStudentJoinError(t(language, '请先输入姓名和活动码。', 'Please enter your name and activity code first.'));
+      return;
+    }
+    const loadedRemoteActivity = await loadRemoteActivityByCode(normalizedCode);
+    if (loadedRemoteActivity || normalizedCode === activity.code) {
       setStudentJoinError('');
+      setStudentCode(normalizedCode);
       setStudentStep(1);
       return;
     }
     setStudentJoinError(t(language, '活动码不正确，请核对老师发布的活动码后再试。', 'The activity code is incorrect. Please check the code shared by the teacher and try again.'));
   }
 
-  function confirmStudentTeam() {
+  async function confirmStudentTeam() {
     const normalizedName = studentName.trim();
     const normalizedTeamName = studentTeamName.trim() || getDefaultTeamName(selectedTeamIndex);
     if (!normalizedName) return;
+    const nextMember: StudentTeamMember = {
+      id: createMemberId(),
+      name: normalizedName,
+      teamIndex: selectedTeamIndex,
+      teamName: normalizedTeamName,
+      role: getExplorerRole(normalizedName, selectedTeamIndex),
+    };
     setStudentTeamName(normalizedTeamName);
     setTeamMembers((members) => {
       const existingMemberIndex = members.findIndex((member) => member.name === normalizedName);
-      const nextMember: StudentTeamMember = {
-        id: existingMemberIndex >= 0 ? members[existingMemberIndex].id : createMemberId(),
-        name: normalizedName,
-        teamIndex: selectedTeamIndex,
-        teamName: normalizedTeamName,
-        role: getExplorerRole(normalizedName, selectedTeamIndex),
+      const memberWithStableId = {
+        ...nextMember,
+        id: existingMemberIndex >= 0 ? members[existingMemberIndex].id : nextMember.id,
       };
       if (existingMemberIndex >= 0) {
-        return members.map((member, index) => (index === existingMemberIndex ? nextMember : member));
+        return members.map((member, index) => (index === existingMemberIndex ? memberWithStableId : member));
       }
-      return [...members, nextMember];
+      return [...members, memberWithStableId];
     });
+    if (supabase) {
+      await supabase.from('team_members').upsert({
+        activity_code: activity.code,
+        team_index: selectedTeamIndex,
+        team_name: normalizedTeamName,
+        student_name: normalizedName,
+        role: nextMember.role,
+      }, { onConflict: 'activity_code,student_name' });
+      setSyncedActivityCode(activity.code);
+      void syncRemoteActivityState(activity.code);
+    }
     setStudentStep(2);
   }
 
@@ -1554,6 +1741,27 @@ function App() {
     setUploadedFile(file);
     setUploadedName(file?.name ?? '');
     setRecognition(null);
+  }
+
+  function applyMissionSubmissionToState(teamIndex: number, missionId: string, record: MissionSubmissionRecord) {
+    setCompletedMissionsByTeam((items) => ({
+      ...items,
+      [teamIndex]: [...new Set([...(items[teamIndex] ?? []), missionId])],
+    }));
+    setMissionCompletionsByTeam((items) => ({
+      ...items,
+      [teamIndex]: {
+        ...(items[teamIndex] ?? {}),
+        [missionId]: record.completer,
+      },
+    }));
+    setMissionSubmissionsByTeam((items) => ({
+      ...items,
+      [teamIndex]: {
+        ...(items[teamIndex] ?? {}),
+        [missionId]: record,
+      },
+    }));
   }
 
   async function submitRecognition() {
@@ -1599,31 +1807,47 @@ function App() {
       setStudentStep(5);
       if (result.matched) {
         const completer = studentName.trim() || studentTeamName;
-        setCompletedMissionsByTeam((items) => ({
-          ...items,
-          [selectedTeamIndex]: [...new Set([...(items[selectedTeamIndex] ?? []), currentMission.id])],
-        }));
-        setMissionCompletionsByTeam((items) => ({
-          ...items,
-          [selectedTeamIndex]: {
-            ...(items[selectedTeamIndex] ?? {}),
-            [currentMission.id]: completer,
-          },
-        }));
-        setMissionSubmissionsByTeam((items) => ({
-          ...items,
-          [selectedTeamIndex]: {
-            ...(items[selectedTeamIndex] ?? {}),
-            [currentMission.id]: {
-              completer,
-              uploadedName: uploadedFile.name,
-              detectedName,
-              confidence: matchConfidence,
-              feedback: nextResult.feedback,
-              completedAt: new Date().toISOString(),
-            },
-          },
-        }));
+        let submissionRecord: MissionSubmissionRecord = {
+          completer,
+          uploadedName: uploadedFile.name,
+          detectedName,
+          confidence: matchConfidence,
+          feedback: nextResult.feedback,
+          completedAt: new Date().toISOString(),
+        };
+        if (supabase) {
+          const { error } = await supabase.from('mission_submissions').insert({
+            activity_code: activity.code,
+            team_index: selectedTeamIndex,
+            mission_id: currentMission.id,
+            completer,
+            uploaded_name: uploadedFile.name,
+            detected_name: detectedName,
+            confidence: matchConfidence,
+            feedback: nextResult.feedback,
+          });
+          if (error) {
+            const { data: existingSubmission } = await supabase
+              .from('mission_submissions')
+              .select('team_index, mission_id, completer, uploaded_name, detected_name, confidence, feedback, completed_at')
+              .eq('activity_code', activity.code)
+              .eq('team_index', selectedTeamIndex)
+              .eq('mission_id', currentMission.id)
+              .maybeSingle<MissionSubmissionDbRow>();
+            if (existingSubmission) {
+              submissionRecord = mapSubmissionRow(existingSubmission);
+              setRecognition({
+                status: '完成',
+                detectedName: submissionRecord.detectedName,
+                confidence: submissionRecord.confidence,
+                feedback: t(language, `本队已由 ${submissionRecord.completer} 完成，结果已锁定。`, `This mission was already completed by ${submissionRecord.completer}, and the result is locked.`),
+              });
+            }
+          } else {
+            setSyncedActivityCode(activity.code);
+          }
+        }
+        applyMissionSubmissionToState(selectedTeamIndex, currentMission.id, submissionRecord);
       }
     } catch (error) {
       setRecognition({
@@ -1645,7 +1869,7 @@ function App() {
     setStudentStep(3);
   }
 
-  function completeAllMissionsForTest() {
+  async function completeAllMissionsForTest() {
     const completer = studentName.trim() || 'L';
     const allMissionIds = activity.missions.map((mission) => mission.id);
     setCompletedMissionsByTeam((items) => ({
@@ -1676,6 +1900,22 @@ function App() {
         ])),
       },
     }));
+    if (supabase) {
+      await supabase.from('mission_submissions').insert(
+        allMissionIds.map((missionId) => ({
+          activity_code: activity.code,
+          team_index: selectedTeamIndex,
+          mission_id: missionId,
+          completer,
+          uploaded_name: '测试直达成果',
+          detected_name: activity.missions.find((mission) => mission.id === missionId)?.title ?? '测试任务',
+          confidence: 1,
+          feedback: '测试模式已标记该任务完成。',
+        })),
+      );
+      setSyncedActivityCode(activity.code);
+      void syncRemoteActivityState(activity.code);
+    }
     setRecognition(null);
     setUploadedName('');
     setUploadedFile(null);
