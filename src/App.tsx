@@ -2443,6 +2443,30 @@ type ArtifactSourceResult = {
 };
 
 async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactSourceResult> {
+  if (isRijksmuseum(museum)) {
+    const rijksArtifacts = await fetchRijksmuseumArtifacts();
+    return {
+      artifacts: rijksArtifacts,
+      message: `已接入 Rijksmuseum Data Services，并加载 ${rijksArtifacts.length} 件代表藏品。`,
+    };
+  }
+
+  if (isLouvreMuseum(museum)) {
+    const louvreArtifacts = await fetchLouvreMuseumArtifacts();
+    return {
+      artifacts: louvreArtifacts,
+      message: `已接入 Louvre Collections JSON，并加载 ${louvreArtifacts.length} 件代表藏品。`,
+    };
+  }
+
+  if (isVanGoghMuseum(museum)) {
+    const vanGoghArtifacts = getArtifactsForMuseum('van-gogh-museum');
+    return {
+      artifacts: vanGoghArtifacts,
+      message: `已加载梵高美术馆官方收藏入口对应的 ${vanGoghArtifacts.length} 件精选藏品。`,
+    };
+  }
+
   if (isMetMuseum(museum)) {
     const metArtifacts = await fetchMetMuseumArtifacts();
     return {
@@ -2473,6 +2497,18 @@ function isMetMuseum(museum: Museum) {
 
 function isClevelandMuseum(museum: Museum) {
   return museum.id === 'cleveland' || /cleveland museum of art|克利夫兰艺术博物馆/i.test(museum.name);
+}
+
+function isRijksmuseum(museum: Museum) {
+  return museum.id === 'rijksmuseum' || /rijksmuseum|阿姆斯特丹国立博物馆|荷兰国家博物馆/i.test(museum.name);
+}
+
+function isLouvreMuseum(museum: Museum) {
+  return museum.id === 'louvre' || /louvre|卢浮宫/i.test(museum.name);
+}
+
+function isVanGoghMuseum(museum: Museum) {
+  return museum.id === 'van-gogh-museum' || /van gogh museum|梵高美术馆|梵高博物馆/i.test(museum.name);
 }
 
 type MetObject = {
@@ -2506,6 +2542,25 @@ type ClevelandArtwork = {
   };
   url?: string;
   creators?: Array<{ description?: string }>;
+};
+
+type RijksmuseumSearchPayload = {
+  orderedItems?: Array<{ id?: string }>;
+};
+
+type LouvreArtwork = {
+  arkId?: string;
+  url?: string;
+  title?: string;
+  displayDateCreated?: string;
+  currentLocation?: string;
+  room?: string;
+  collection?: string;
+  materialsAndTechniques?: string;
+  objectHistory?: string;
+  description?: string;
+  creator?: Array<{ label?: string }>;
+  image?: Array<{ urlImage?: string; urlThumbnail?: string }>;
 };
 
 async function fetchMetMuseumArtifacts(): Promise<Artifact[]> {
@@ -2567,6 +2622,157 @@ async function fetchClevelandMuseumArtifacts(): Promise<Artifact[]> {
         sourceName: 'Cleveland Museum of Art Open Access API',
       };
     });
+}
+
+async function fetchRijksmuseumArtifacts(): Promise<Artifact[]> {
+  const curatedArtifacts = getArtifactsForMuseum('rijksmuseum');
+  const endpoint = new URL('https://data.rijksmuseum.nl/search/collection');
+  endpoint.searchParams.set('type', 'painting');
+  endpoint.searchParams.set('imageAvailable', 'true');
+
+  const payload = await fetchJsonWithTimeout<RijksmuseumSearchPayload>(endpoint.toString(), 10000);
+  const detailUrls = (payload.orderedItems ?? [])
+    .map((item) => item.id)
+    .filter((id): id is string => Boolean(id))
+    .slice(0, MAX_SELECTED_ARTIFACTS);
+
+  if (detailUrls.length === 0) return curatedArtifacts;
+
+  const settledDetails = await Promise.allSettled(
+    detailUrls.map((url) => fetchJsonWithTimeout<Record<string, unknown>>(`${url}?_profile=la-framed`, 10000)),
+  );
+  const mappedArtifacts = settledDetails
+    .flatMap((result, index) => result.status === 'fulfilled' ? [mapRijksmuseumObjectToArtifact(result.value, curatedArtifacts[index], index)] : [])
+    .filter((artifact) => artifact.name && artifact.image);
+
+  return mappedArtifacts.length >= MIN_SELECTED_ARTIFACTS ? mappedArtifacts : curatedArtifacts;
+}
+
+async function fetchLouvreMuseumArtifacts(): Promise<Artifact[]> {
+  const curatedArtifacts = getArtifactsForMuseum('louvre');
+  const officialJsonIds = ['cl010062370'];
+  const settledDetails = await Promise.allSettled(
+    officialJsonIds.map((arkId) => fetchJsonWithTimeout<LouvreArtwork>(`https://collections.louvre.fr/ark:/53355/${arkId}.json`, 10000)),
+  );
+  const officialArtifacts = settledDetails
+    .flatMap((result, index) => result.status === 'fulfilled' ? [mapLouvreObjectToArtifact(result.value, curatedArtifacts[index], index)] : [])
+    .filter((artifact) => artifact.name && artifact.image);
+  const officialIds = new Set(officialArtifacts.map((artifact) => artifact.id));
+  return [
+    ...officialArtifacts,
+    ...curatedArtifacts.filter((artifact) => !officialIds.has(artifact.id)),
+  ].slice(0, MAX_SELECTED_ARTIFACTS);
+}
+
+function mapRijksmuseumObjectToArtifact(object: Record<string, unknown>, fallback: Artifact | undefined, index: number): Artifact {
+  const sourceUrl = findFirstUrl(object, (url) => url.includes('rijksmuseum.nl') && url.includes('/collectie'));
+  const name = findLinkedArtName(object) || fallback?.name || `Rijksmuseum 藏品 ${index + 1}`;
+  const era = findFirstContent(object.produced_by, (content) => /\d{3,4}|century|eeuw|ca\.|c\./i.test(content)) || fallback?.era || '年代待确认';
+  const gallery = findFirstContent(object.current_location, (content) => content.length > 2 && content.length < 90) || fallback?.gallery || 'Rijksmuseum Collection';
+  const summary = [
+    findReadableDescription(object),
+    findCreatorName(object) ? `作者/制作者：${findCreatorName(object)}` : '',
+    findMaterialText(object) ? `材料/技法：${findMaterialText(object)}` : '',
+  ].filter(Boolean).join('。') || fallback?.summary || '来自 Rijksmuseum Data Services 的官方馆藏条目。';
+
+  return {
+    id: `rijks-${extractStableId(String(object.id ?? sourceUrl ?? index))}`,
+    name,
+    era,
+    gallery,
+    summary,
+    educationTags: fallback?.educationTags ?? inferTags(name, summary).slice(0, 2),
+    image: findFirstUrl(object, (url) => /\.(jpe?g|png|webp)(\?|$)/i.test(url)) || fallback?.image || '',
+    sourceUrl: sourceUrl || fallback?.sourceUrl || String(object.id ?? ''),
+    sourceName: 'Rijksmuseum Data Services',
+  };
+}
+
+function mapLouvreObjectToArtifact(object: LouvreArtwork, fallback: Artifact | undefined, index: number): Artifact {
+  const creator = object.creator?.map((item) => item.label).filter(Boolean).join('；');
+  const summary = [
+    object.description,
+    object.materialsAndTechniques ? `材料/技法：${object.materialsAndTechniques}` : '',
+    creator ? `作者/制作者：${creator}` : '',
+  ].filter(Boolean).join('。') || fallback?.summary || '来自 Louvre Collections JSON 的官方馆藏条目。';
+
+  return {
+    id: fallback?.id || `louvre-${object.arkId || index}`,
+    name: object.title || fallback?.name || `卢浮宫藏品 ${index + 1}`,
+    era: object.displayDateCreated || fallback?.era || '年代待确认',
+    gallery: object.currentLocation || object.room || object.collection || fallback?.gallery || 'Louvre Collections',
+    summary: clampPromptText(summary, 360),
+    educationTags: fallback?.educationTags ?? inferTags(object.title ?? '', summary).slice(0, 2),
+    image: object.image?.[0]?.urlThumbnail || object.image?.[0]?.urlImage || fallback?.image || '',
+    sourceUrl: object.url || fallback?.sourceUrl || '',
+    sourceName: 'Louvre Collections JSON',
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function findLinkedArtName(object: Record<string, unknown>) {
+  const identifiedBy = Array.isArray(object.identified_by) ? object.identified_by : [];
+  const names = identifiedBy.filter(isRecord).filter((item) => item.type === 'Name');
+  return findContentWithLanguage(names, 'en') || findFirstContent(names, (content) => content.length > 2);
+}
+
+function findContentWithLanguage(value: unknown, languageCode: string): string {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const result = findContentWithLanguage(item, languageCode);
+      if (result) return result;
+    }
+    return '';
+  }
+  if (!isRecord(value)) return '';
+  const content = typeof value.content === 'string' ? value.content : '';
+  const languages = Array.isArray(value.language) ? value.language : [];
+  const hasLanguage = languages.some((language) => isRecord(language) && typeof language.id === 'string' && language.id.toLowerCase().includes(languageCode));
+  if (content && hasLanguage) return content;
+  return '';
+}
+
+function findFirstContent(value: unknown, predicate: (content: string) => boolean): string {
+  if (typeof value === 'string') return predicate(value) ? value : '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const result = findFirstContent(item, predicate);
+      if (result) return result;
+    }
+    return '';
+  }
+  if (!isRecord(value)) return '';
+  const directContent = typeof value.content === 'string' ? value.content.trim() : '';
+  if (directContent && predicate(directContent)) return directContent;
+  for (const child of Object.values(value)) {
+    const result = findFirstContent(child, predicate);
+    if (result) return result;
+  }
+  return '';
+}
+
+function findFirstUrl(value: unknown, predicate: (url: string) => boolean): string {
+  return findFirstContent(value, (content) => /^https?:\/\//.test(content) && predicate(content));
+}
+
+function findReadableDescription(object: Record<string, unknown>) {
+  return findFirstContent(object.subject_of, (content) => content.length > 80 && content.length < 520 && !/^https?:\/\//.test(content));
+}
+
+function findCreatorName(object: Record<string, unknown>) {
+  return findFirstContent(object.produced_by, (content) => content.length > 2 && content.length < 80 && !/\d/.test(content));
+}
+
+function findMaterialText(object: Record<string, unknown>) {
+  return findFirstContent(object.made_of, (content) => content.length > 2 && content.length < 80) ||
+    findFirstContent(object.referred_to_by, (content) => /oil|paint|canvas|panel|bronze|marble|wood|paper/i.test(content) && content.length < 120);
+}
+
+function extractStableId(value: string) {
+  return value.split('/').filter(Boolean).pop()?.replace(/[^a-zA-Z0-9-]/g, '-') || 'object';
 }
 
 async function fetchJsonWithTimeout<T>(url: string, timeout: number): Promise<T> {
