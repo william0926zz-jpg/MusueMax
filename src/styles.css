@@ -145,7 +145,7 @@ body.theme-paper {
   --hero-soft: rgba(182, 66, 47, 0.22);
 }
 
-button, input, textarea {
+button, input, textarea, select {
   font: inherit;
 }
 
@@ -973,14 +973,37 @@ button {
   font-weight: 700;
 }
 
-.settings-panel input, .settings-panel textarea {
+.settings-panel input, .settings-panel textarea, .settings-panel select {
   border: 1px solid #d8d1c4;
   border-radius: 8px;
   background: #ffffff;
   padding: 11px 12px;
+  color: #5f5245;
+  font-weight: 700;
 }
 
 .settings-panel textarea { min-height: 96px; resize: vertical; }
+
+.select-shell {
+  position: relative;
+  display: grid;
+}
+
+.select-shell select {
+  width: 100%;
+  min-height: 47px;
+  padding-right: 42px;
+  appearance: none;
+}
+
+.select-shell svg {
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--theme-muted);
+  pointer-events: none;
+}
 
 .segmented {
   display: grid;

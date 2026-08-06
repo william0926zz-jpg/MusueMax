@@ -4,6 +4,7 @@ import {
   BookOpen,
   Camera,
   Check,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   Compass,
@@ -28,6 +29,14 @@ import { isSupabaseConfigured, supabase } from './supabaseClient';
 import type { Activity, Artifact, Mission, Museum, RecognitionResult, StoryStyle } from './types';
 
 const storyStyles: StoryStyle[] = ['魔幻', '科幻', '历史穿越', '冒险'];
+const teachingAudienceOptions = {
+  zh: ['小学低年级', '小学高年级', '七年级', '八年级', '九年级', '高中生', '大学生', '亲子研学', '教师培训'],
+  en: ['Lower Primary', 'Upper Primary', 'Grade 7', 'Grade 8', 'Grade 9', 'High School', 'College Students', 'Family Field Trip', 'Teacher Training'],
+};
+const topicOptions = {
+  zh: ['历史', '文明交流', '艺术鉴赏', '科学技术', '考古探索', '文化遗产', '城市研学', '跨学科项目', '双语表达'],
+  en: ['History', 'Civilizational Exchange', 'Art Appreciation', 'Science & Technology', 'Archaeology', 'Cultural Heritage', 'Urban Field Study', 'Interdisciplinary Project', 'Bilingual Expression'],
+};
 
 const explorerRoles = ['线索记录员', '图像侦察员', '时间守护者', '展厅导航员', '纹样解码师', '材料分析师', '故事讲述者', '路线规划师'];
 
@@ -2298,22 +2307,6 @@ function TeacherWorkspace(props: TeacherWorkspaceProps) {
           <strong>{props.activity.name}</strong>
           <p>{t(props.language, '发布后可在复盘页复制给学生', 'After publishing, you can copy it for students from the review page.')}</p>
         </div>
-        <div className="history-card">
-          <small>{t(props.language, '已发布活动', 'Published Activities')}</small>
-          {props.activityHistory.length === 0 ? (
-            <p>{t(props.language, '还没有发布记录，发布一次活动后会显示在这里。', 'No published activities yet. Once you publish one, it will appear here.')}</p>
-          ) : (
-            <div className="history-list">
-              {props.activityHistory.slice(0, 4).map((entry) => (
-                <button key={entry.id} className="history-item" onClick={() => props.onRestoreActivity(entry)}>
-                  <strong>{entry.activity.name}</strong>
-                  <span>{entry.activity.code}</span>
-                  <small>{new Date(entry.publishedAt).toLocaleString(props.language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })}</small>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </aside>
 
       <div className="content-area">
@@ -2865,7 +2858,7 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
       <section className="panel settings-panel">
         <div className="section-heading">
           <span><ClipboardList size={20} /> {t(props.language, '任务参数', 'Mission Settings')}</span>
-          <small>{t(props.language, '根据年级、学科、时长和故事风格生成', 'Generate from grade, subject, duration, and story style')}</small>
+          <small>{t(props.language, '根据教学人群、主题、时长和故事风格生成', 'Generate from audience, topic, duration, and story style')}</small>
         </div>
         <div className="settings-overview">
           <div className="helper-card">
@@ -2881,8 +2874,18 @@ function MissionGenerator(props: TeacherWorkspaceProps) {
             <span>{getStoryStyleName(props.storyStyle, props.language)}</span>
           </div>
         </div>
-        <label>{t(props.language, '年级', 'Grade')}<input value={props.grade} onChange={(event) => props.setGrade(event.target.value)} /></label>
-        <label>{t(props.language, '学科', 'Subject')}<input value={props.subject} onChange={(event) => props.setSubject(event.target.value)} /></label>
+        <SelectField
+          label={t(props.language, '教学人群', 'Teaching Audience')}
+          value={props.grade}
+          options={teachingAudienceOptions[props.language]}
+          onChange={props.setGrade}
+        />
+        <SelectField
+          label={t(props.language, '主题', 'Topic')}
+          value={props.subject}
+          options={topicOptions[props.language]}
+          onChange={props.setSubject}
+        />
         <label>{t(props.language, '活动时长', 'Duration')}<input type="number" value={props.duration} onChange={(event) => props.setDuration(Number(event.target.value))} /></label>
         <label>{t(props.language, '分成几个小队', 'Number of Teams')}<input type="number" min="1" max="12" value={props.teamCount} onChange={(event) => props.setTeamCount(Math.max(1, Math.min(12, Number(event.target.value) || 1)))} /></label>
         <label>{t(props.language, '教学目标', 'Learning Goal')}<textarea value={props.goal} onChange={(event) => props.setGoal(event.target.value)} /></label>
@@ -3025,23 +3028,26 @@ function PublishAndReport(props: TeacherWorkspaceProps) {
             <div><strong>{t(props.language, '暂无小队数据', 'No team data yet')}</strong><span>{t(props.language, '待生成', 'Pending')}</span></div>
           )}
         </div>
-        <div className="published-list-block">
-          <small>{t(props.language, '最近发布', 'Recently Published')}</small>
-          {props.activityHistory.length === 0 ? (
-            <div className="empty-state compact">{t(props.language, '发布活动后，这里会保留最近的活动记录。', 'After publishing an activity, the most recent records will stay here.')}</div>
-          ) : (
-            <div className="published-list">
-              {props.activityHistory.slice(0, 3).map((entry) => (
-                <button key={entry.id} className="published-item" onClick={() => props.onRestoreActivity(entry)}>
-                  <strong>{entry.activity.name}</strong>
-                  <span>{entry.activity.code}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </section>
     </div>
+  );
+}
+
+function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  const selectOptions = options.includes(value) ? options : [value, ...options];
+
+  return (
+    <label className="select-field">
+      {label}
+      <span className="select-shell">
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          {selectOptions.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+        <ChevronDown size={18} aria-hidden="true" />
+      </span>
+    </label>
   );
 }
 
