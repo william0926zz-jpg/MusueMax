@@ -52,6 +52,7 @@ const homeThemes: Array<{ id: ThemeKey; name: string; tone: string; toneEn: stri
 
 const MIN_SELECTED_ARTIFACTS = 5;
 const MAX_SELECTED_ARTIFACTS = 10;
+const MAX_COLLECTION_SOURCE_ARTIFACTS = 100;
 const TEACHER_PORTAL_PASSWORD = '2026Max';
 
 const themeNames: Record<ThemeKey, string> = {
@@ -2447,7 +2448,7 @@ async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactS
     const rijksArtifacts = await fetchRijksmuseumArtifacts();
     return {
       artifacts: rijksArtifacts,
-      message: `已接入 Rijksmuseum Data Services，并加载 ${rijksArtifacts.length} 件代表藏品。`,
+      message: `已接入 Rijksmuseum Data Services，并尽量批量加载 ${rijksArtifacts.length} 件官方藏品。`,
     };
   }
 
@@ -2455,15 +2456,15 @@ async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactS
     const louvreArtifacts = await fetchLouvreMuseumArtifacts();
     return {
       artifacts: louvreArtifacts,
-      message: `已接入 Louvre Collections JSON，并加载 ${louvreArtifacts.length} 件代表藏品。`,
+      message: `已接入 Louvre Collections 官方搜索与 JSON，并尽量批量加载 ${louvreArtifacts.length} 件官方藏品。`,
     };
   }
 
   if (isVanGoghMuseum(museum)) {
-    const vanGoghArtifacts = getArtifactsForMuseum('van-gogh-museum');
+    const vanGoghArtifacts = await fetchVanGoghMuseumArtifacts();
     return {
       artifacts: vanGoghArtifacts,
-      message: `已加载梵高美术馆官方收藏入口对应的 ${vanGoghArtifacts.length} 件精选藏品。`,
+      message: `已接入 Van Gogh Museum 官方收藏搜索，并尽量批量加载 ${vanGoghArtifacts.length} 件官方藏品。`,
     };
   }
 
@@ -2546,6 +2547,7 @@ type ClevelandArtwork = {
 
 type RijksmuseumSearchPayload = {
   orderedItems?: Array<{ id?: string }>;
+  next?: { id?: string };
 };
 
 type LouvreArtwork = {
@@ -2561,6 +2563,10 @@ type LouvreArtwork = {
   description?: string;
   creator?: Array<{ label?: string }>;
   image?: Array<{ urlImage?: string; urlThumbnail?: string }>;
+};
+
+type VanGoghSearchPayload = {
+  resultsHtml?: string;
 };
 
 async function fetchMetMuseumArtifacts(): Promise<Artifact[]> {
@@ -2627,14 +2633,19 @@ async function fetchClevelandMuseumArtifacts(): Promise<Artifact[]> {
 async function fetchRijksmuseumArtifacts(): Promise<Artifact[]> {
   const curatedArtifacts = getArtifactsForMuseum('rijksmuseum');
   const endpoint = new URL('https://data.rijksmuseum.nl/search/collection');
-  endpoint.searchParams.set('type', 'painting');
   endpoint.searchParams.set('imageAvailable', 'true');
 
-  const payload = await fetchJsonWithTimeout<RijksmuseumSearchPayload>(endpoint.toString(), 10000);
-  const detailUrls = (payload.orderedItems ?? [])
-    .map((item) => item.id)
-    .filter((id): id is string => Boolean(id))
-    .slice(0, MAX_SELECTED_ARTIFACTS);
+  const detailUrls: string[] = [];
+  let nextUrl = endpoint.toString();
+
+  while (nextUrl && detailUrls.length < MAX_COLLECTION_SOURCE_ARTIFACTS) {
+    const payload = await fetchJsonWithTimeout<RijksmuseumSearchPayload>(nextUrl, 10000);
+    for (const item of payload.orderedItems ?? []) {
+      if (item.id && !detailUrls.includes(item.id)) detailUrls.push(item.id);
+      if (detailUrls.length >= MAX_COLLECTION_SOURCE_ARTIFACTS) break;
+    }
+    nextUrl = payload.next?.id || '';
+  }
 
   if (detailUrls.length === 0) return curatedArtifacts;
 
@@ -2645,23 +2656,51 @@ async function fetchRijksmuseumArtifacts(): Promise<Artifact[]> {
     .flatMap((result, index) => result.status === 'fulfilled' ? [mapRijksmuseumObjectToArtifact(result.value, curatedArtifacts[index], index)] : [])
     .filter((artifact) => artifact.name && artifact.image);
 
-  return mappedArtifacts.length >= MIN_SELECTED_ARTIFACTS ? mappedArtifacts : curatedArtifacts;
+  return mergeArtifacts(mappedArtifacts, curatedArtifacts).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS);
 }
 
 async function fetchLouvreMuseumArtifacts(): Promise<Artifact[]> {
   const curatedArtifacts = getArtifactsForMuseum('louvre');
-  const officialJsonIds = ['cl010062370'];
+  const searchedArtifacts = await fetchLouvreSearchArtifacts();
+  const officialJsonIds = ['cl010062370', ...searchedArtifacts.map((artifact) => artifact.id.replace(/^louvre-/, ''))]
+    .filter((arkId, index, ids) => /^cl\d+$/.test(arkId) && ids.indexOf(arkId) === index)
+    .slice(0, 16);
   const settledDetails = await Promise.allSettled(
     officialJsonIds.map((arkId) => fetchJsonWithTimeout<LouvreArtwork>(`https://collections.louvre.fr/ark:/53355/${arkId}.json`, 10000)),
   );
   const officialArtifacts = settledDetails
     .flatMap((result, index) => result.status === 'fulfilled' ? [mapLouvreObjectToArtifact(result.value, curatedArtifacts[index], index)] : [])
     .filter((artifact) => artifact.name && artifact.image);
-  const officialIds = new Set(officialArtifacts.map((artifact) => artifact.id));
-  return [
-    ...officialArtifacts,
-    ...curatedArtifacts.filter((artifact) => !officialIds.has(artifact.id)),
-  ].slice(0, MAX_SELECTED_ARTIFACTS);
+  return mergeArtifacts(officialArtifacts, searchedArtifacts, curatedArtifacts).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS);
+}
+
+async function fetchLouvreSearchArtifacts(): Promise<Artifact[]> {
+  const endpoint = new URL('https://collections.louvre.fr/en/recherche');
+  endpoint.searchParams.set('q', '');
+  endpoint.searchParams.set('limit', String(MAX_COLLECTION_SOURCE_ARTIFACTS));
+
+  const html = await fetchTextWithTimeout(endpoint.toString(), 10000);
+  return parseLouvreSearchHtml(html).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS);
+}
+
+async function fetchVanGoghMuseumArtifacts(): Promise<Artifact[]> {
+  const curatedArtifacts = getArtifactsForMuseum('van-gogh-museum');
+  const pageSize = 24;
+  const pages = Math.ceil(MAX_COLLECTION_SOURCE_ARTIFACTS / pageSize);
+  const endpoints = Array.from({ length: pages }, (_, page) => {
+    const endpoint = new URL('https://www.vangoghmuseum.nl/en/collection/search');
+    endpoint.searchParams.set('from', String(page * pageSize));
+    endpoint.searchParams.set('pageSize', String(pageSize));
+    return endpoint.toString();
+  });
+  const settledPages = await Promise.allSettled(
+    endpoints.map((url) => fetchJsonWithTimeout<VanGoghSearchPayload>(url, 10000)),
+  );
+  const officialArtifacts = settledPages.flatMap((result) => (
+    result.status === 'fulfilled' && result.value.resultsHtml ? parseVanGoghSearchHtml(result.value.resultsHtml) : []
+  ));
+
+  return mergeArtifacts(officialArtifacts, curatedArtifacts).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS);
 }
 
 function mapRijksmuseumObjectToArtifact(object: Record<string, unknown>, fallback: Artifact | undefined, index: number): Artifact {
@@ -2697,7 +2736,7 @@ function mapLouvreObjectToArtifact(object: LouvreArtwork, fallback: Artifact | u
   ].filter(Boolean).join('。') || fallback?.summary || '来自 Louvre Collections JSON 的官方馆藏条目。';
 
   return {
-    id: fallback?.id || `louvre-${object.arkId || index}`,
+    id: object.arkId ? `louvre-${object.arkId}` : fallback?.id || `louvre-${index}`,
     name: object.title || fallback?.name || `卢浮宫藏品 ${index + 1}`,
     era: object.displayDateCreated || fallback?.era || '年代待确认',
     gallery: object.currentLocation || object.room || object.collection || fallback?.gallery || 'Louvre Collections',
@@ -2707,6 +2746,102 @@ function mapLouvreObjectToArtifact(object: LouvreArtwork, fallback: Artifact | u
     sourceUrl: object.url || fallback?.sourceUrl || '',
     sourceName: 'Louvre Collections JSON',
   };
+}
+
+function parseLouvreSearchHtml(html: string): Artifact[] {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return Array.from(doc.querySelectorAll<HTMLElement>('article.card--search'))
+    .map((card, index) => {
+      const link = card.querySelector<HTMLAnchorElement>('a[href*="/ark:/53355/"]');
+      const href = link?.getAttribute('href') || '';
+      const arkId = href.match(/cl\d+/)?.[0] || `search-${index}`;
+      const img = card.querySelector<HTMLImageElement>('img[data-src], img[src]');
+      const title = cleanHtmlText(link?.textContent || img?.getAttribute('alt') || `卢浮宫藏品 ${index + 1}`);
+      const date = cleanHtmlText(card.querySelector('.card__date')?.textContent || '');
+      const creator = cleanHtmlText(card.querySelector('.card__author')?.textContent || '');
+      const image = absolutizeUrl(img?.getAttribute('data-src') || img?.getAttribute('src') || '', 'https://collections.louvre.fr');
+
+      return {
+        id: `louvre-${arkId}`,
+        name: title,
+        era: date || '年代待确认',
+        gallery: 'Louvre Collections',
+        summary: clampPromptText([
+          '来自 Louvre Collections 官方搜索结果的藏品。',
+          creator ? `作者/制作者：${creator}` : '',
+        ].filter(Boolean).join('。'), 360),
+        educationTags: inferTags(title, `${date} ${creator}`).slice(0, 2),
+        image,
+        sourceUrl: absolutizeUrl(href, 'https://collections.louvre.fr'),
+        sourceName: 'Louvre Collections Search',
+      };
+    })
+    .filter((artifact) => artifact.name && artifact.image);
+}
+
+function parseVanGoghSearchHtml(html: string): Artifact[] {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return Array.from(doc.querySelectorAll<HTMLElement>('.collection-art-object-list-item'))
+    .map((card, index) => {
+      const link = card.querySelector<HTMLAnchorElement>('a.collection-art-object-wrapper[href]');
+      const href = link?.getAttribute('href') || '';
+      const objectId = href.split('/').filter(Boolean).pop() || `search-${index}`;
+      const title = cleanHtmlText(
+        link?.getAttribute('title') ||
+        card.getAttribute('aria-label') ||
+        card.querySelector('.collection-art-object-item-title')?.textContent ||
+        `梵高美术馆藏品 ${index + 1}`,
+      );
+      const creatorText = cleanHtmlText(card.querySelector('.collection-art-object-item-creator')?.textContent || '');
+      const imageElement = card.querySelector<HTMLImageElement>('img[data-src], img[src]');
+      const image = upgradeIiifPreview(imageElement?.getAttribute('data-src') || imageElement?.getAttribute('src') || '');
+      const era = creatorText.match(/\b\d{4}\b/)?.[0] || '年代待确认';
+
+      return {
+        id: `vgm-${objectId}`,
+        name: title,
+        era,
+        gallery: 'Van Gogh Museum Collection',
+        summary: clampPromptText([
+          '来自 Van Gogh Museum 官方收藏搜索的藏品。',
+          creatorText ? `作者/年代：${creatorText}` : '',
+        ].filter(Boolean).join('。'), 360),
+        educationTags: inferTags(title, creatorText).slice(0, 2),
+        image,
+        sourceUrl: absolutizeUrl(href, 'https://www.vangoghmuseum.nl'),
+        sourceName: 'Van Gogh Museum Collection Search',
+      };
+    })
+    .filter((artifact) => artifact.name && artifact.image);
+}
+
+function mergeArtifacts(...artifactGroups: Artifact[][]) {
+  const seen = new Set<string>();
+  const merged: Artifact[] = [];
+  for (const artifact of artifactGroups.flat()) {
+    const key = artifact.id || `${artifact.name}-${artifact.sourceUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(artifact);
+  }
+  return merged;
+}
+
+function cleanHtmlText(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function absolutizeUrl(url: string, baseUrl: string) {
+  if (!url) return '';
+  try {
+    return new URL(url, baseUrl).toString();
+  } catch {
+    return url;
+  }
+}
+
+function upgradeIiifPreview(url: string) {
+  return url.replace('/full/200,/', '/full/900,/');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2782,6 +2917,15 @@ async function fetchJsonWithTimeout<T>(url: string, timeout: number): Promise<T>
   window.clearTimeout(timeoutId);
   if (!response.ok) throw new Error(`request failed: ${url}`);
   return response.json() as Promise<T>;
+}
+
+async function fetchTextWithTimeout(url: string, timeout: number): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeout);
+  const response = await fetch(url, { signal: controller.signal });
+  window.clearTimeout(timeoutId);
+  if (!response.ok) throw new Error(`request failed: ${url}`);
+  return response.text();
 }
 
 async function fetchMuseumCollectionArtifacts(museumWikidataId: string): Promise<Artifact[]> {
