@@ -1453,11 +1453,6 @@ button {
   color: #123c3a;
 }
 
-.test-shortcut {
-  margin-top: 10px;
-  border-style: dashed;
-}
-
 .mission-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 390px;
@@ -1764,6 +1759,65 @@ body.theme-night .upload-zone,
 body.theme-night .join-form label:not(.join-box),
 body.theme-night .join-box {
   background: rgba(36, 31, 25, 0.9);
+}
+
+body.theme-night .panel,
+body.theme-night .sidebar,
+body.theme-night .mission-card,
+body.theme-night .artifact-card,
+body.theme-night .museum-card,
+body.theme-night .selected-museum,
+body.theme-night .focus-card,
+body.theme-night .progress-card,
+body.theme-night .story-panel,
+body.theme-night .result-panel,
+body.theme-night .achievement-card,
+body.theme-night .team-panel,
+body.theme-night .team-setup-panel {
+  color: #fff7e7;
+}
+
+body.theme-night .searchbox input,
+body.theme-night .settings-panel input,
+body.theme-night .settings-panel textarea,
+body.theme-night .settings-panel select,
+body.theme-night .join-form input,
+body.theme-night .join-box input,
+body.theme-night .team-name-field input {
+  background: rgba(255, 247, 231, 0.06);
+  color: #fff7e7;
+}
+
+body.theme-night .settings-panel select option {
+  background: #241f19;
+  color: #fff7e7;
+}
+
+body.theme-night .searchbox input::placeholder,
+body.theme-night .settings-panel textarea::placeholder,
+body.theme-night .join-form input::placeholder,
+body.theme-night .join-box input::placeholder,
+body.theme-night .team-name-field input::placeholder,
+body.theme-night small,
+body.theme-night .microcopy,
+body.theme-night .mission-title-row small,
+body.theme-night .focus-card p,
+body.theme-night .story-panel p,
+body.theme-night .result-panel p,
+body.theme-night .achievement-card p {
+  color: #eadcc0;
+}
+
+body.theme-night .mission-map .current {
+  border-color: #f0c85d;
+  background: rgba(213, 169, 60, 0.2);
+  color: #fff7e7;
+}
+
+body.theme-night .mission-map .done {
+  border-color: #45b39d;
+  background: rgba(69, 179, 157, 0.18);
+  color: #f5fff8;
 }
 
 @media (max-width: 1040px) {

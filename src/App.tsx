@@ -1878,59 +1878,6 @@ function App() {
     setStudentStep(3);
   }
 
-  async function completeAllMissionsForTest() {
-    const completer = studentName.trim() || 'L';
-    const allMissionIds = activity.missions.map((mission) => mission.id);
-    setCompletedMissionsByTeam((items) => ({
-      ...items,
-      [selectedTeamIndex]: allMissionIds,
-    }));
-    setMissionCompletionsByTeam((items) => ({
-      ...items,
-      [selectedTeamIndex]: {
-        ...(items[selectedTeamIndex] ?? {}),
-        ...Object.fromEntries(allMissionIds.map((missionId) => [missionId, completer])),
-      },
-    }));
-    setMissionSubmissionsByTeam((items) => ({
-      ...items,
-      [selectedTeamIndex]: {
-        ...(items[selectedTeamIndex] ?? {}),
-        ...Object.fromEntries(allMissionIds.map((missionId) => [
-          missionId,
-          {
-            completer,
-            uploadedName: '测试直达成果',
-            detectedName: activity.missions.find((mission) => mission.id === missionId)?.title ?? '测试任务',
-            confidence: 1,
-            feedback: '测试模式已标记该任务完成。',
-            completedAt: new Date().toISOString(),
-          },
-        ])),
-      },
-    }));
-    if (supabase) {
-      await supabase.from('mission_submissions').insert(
-        allMissionIds.map((missionId) => ({
-          activity_code: activity.code,
-          team_index: selectedTeamIndex,
-          mission_id: missionId,
-          completer,
-          uploaded_name: '测试直达成果',
-          detected_name: activity.missions.find((mission) => mission.id === missionId)?.title ?? '测试任务',
-          confidence: 1,
-          feedback: '测试模式已标记该任务完成。',
-        })),
-      );
-      setSyncedActivityCode(activity.code);
-      void syncRemoteActivityState(activity.code);
-    }
-    setRecognition(null);
-    setUploadedName('');
-    setUploadedFile(null);
-    setStudentStep(7);
-  }
-
   function resetStudentFlow() {
     setStudentStep(0);
     setStudentName('');
@@ -2095,7 +2042,6 @@ function App() {
           onSelectPhoto={selectStudentPhoto}
           onSubmitPhoto={submitRecognition}
           onNextMission={goNextMission}
-          onCompleteAllForTest={completeAllMissionsForTest}
           onResetStudentFlow={resetStudentFlow}
           activeTheme={activeTheme}
         />
@@ -3081,7 +3027,6 @@ type StudentWorkspaceProps = {
   onSelectPhoto: (file: File | null) => void;
   onSubmitPhoto: () => void;
   onNextMission: () => void;
-  onCompleteAllForTest: () => void;
   onResetStudentFlow: () => void;
   activeTheme: ThemeKey;
 };
@@ -3243,9 +3188,6 @@ function StudentDashboard(props: StudentWorkspaceProps) {
         )}
       </div>
       <button className="primary-button" onClick={() => props.setStep(4)}>{t(props.language, '进入已选关卡', 'Open Selected Mission')} <ChevronRight size={18} /></button>
-      <button className="ghost-button full test-shortcut" onClick={props.onCompleteAllForTest}>
-        <Check size={17} /> {t(props.language, '测试直达成果', 'Test: Jump To Ending')}
-      </button>
     </section>
   );
 }
