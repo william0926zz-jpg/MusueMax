@@ -52,7 +52,8 @@ const homeThemes: Array<{ id: ThemeKey; name: string; tone: string; toneEn: stri
 
 const MIN_SELECTED_ARTIFACTS = 5;
 const MAX_SELECTED_ARTIFACTS = 10;
-const MAX_COLLECTION_SOURCE_ARTIFACTS = 100;
+const MAX_COLLECTION_SOURCE_ARTIFACTS = 200;
+const ARTIFACT_IMAGE_FALLBACK = 'https://images.unsplash.com/photo-1566127992631-137a642a90f4?auto=format&fit=crop&w=1200&q=80';
 const TEACHER_PORTAL_PASSWORD = '2026Max';
 
 const themeNames: Record<ThemeKey, string> = {
@@ -2445,6 +2446,14 @@ type ArtifactSourceResult = {
 
 async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactSourceResult> {
   if (isRijksmuseum(museum)) {
+    const serverArtifacts = await fetchServerMuseumArtifacts('rijksmuseum').catch(() => []);
+    if (serverArtifacts.length >= MIN_SELECTED_ARTIFACTS) {
+      return {
+        artifacts: mergeArtifacts(serverArtifacts, getArtifactsForMuseum('rijksmuseum')).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS),
+        message: `已通过 MUSEUMAX 服务端代理加载 ${serverArtifacts.length} 件 Rijksmuseum 相关带图藏品。`,
+      };
+    }
+
     const rijksArtifacts = await fetchRijksmuseumArtifacts();
     return {
       artifacts: rijksArtifacts,
@@ -2453,6 +2462,14 @@ async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactS
   }
 
   if (isLouvreMuseum(museum)) {
+    const serverArtifacts = await fetchServerMuseumArtifacts('louvre').catch(() => []);
+    if (serverArtifacts.length >= MIN_SELECTED_ARTIFACTS) {
+      return {
+        artifacts: mergeArtifacts(serverArtifacts, getArtifactsForMuseum('louvre')).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS),
+        message: `已通过 MUSEUMAX 服务端代理加载 ${serverArtifacts.length} 件 Louvre Collections 带图藏品。`,
+      };
+    }
+
     const louvreArtifacts = await fetchLouvreMuseumArtifacts();
     return {
       artifacts: louvreArtifacts,
@@ -2461,6 +2478,14 @@ async function fetchTrustedArtifactsForMuseum(museum: Museum): Promise<ArtifactS
   }
 
   if (isVanGoghMuseum(museum)) {
+    const serverArtifacts = await fetchServerMuseumArtifacts('van-gogh-museum').catch(() => []);
+    if (serverArtifacts.length >= MIN_SELECTED_ARTIFACTS) {
+      return {
+        artifacts: mergeArtifacts(serverArtifacts, getArtifactsForMuseum('van-gogh-museum')).slice(0, MAX_COLLECTION_SOURCE_ARTIFACTS),
+        message: `已通过 MUSEUMAX 服务端代理加载 ${serverArtifacts.length} 件 Van Gogh Museum 官方收藏带图藏品。`,
+      };
+    }
+
     const vanGoghArtifacts = await fetchVanGoghMuseumArtifacts();
     return {
       artifacts: vanGoghArtifacts,
@@ -2568,6 +2593,19 @@ type LouvreArtwork = {
 type VanGoghSearchPayload = {
   resultsHtml?: string;
 };
+
+type ServerMuseumCollectionPayload = {
+  artifacts?: Artifact[];
+  count?: number;
+};
+
+async function fetchServerMuseumArtifacts(museumId: string): Promise<Artifact[]> {
+  const endpoint = new URL('/api/museum-collections', window.location.origin);
+  endpoint.searchParams.set('museum', museumId);
+  endpoint.searchParams.set('limit', String(MAX_COLLECTION_SOURCE_ARTIFACTS));
+  const payload = await fetchJsonWithTimeout<ServerMuseumCollectionPayload>(endpoint.toString(), 30000);
+  return (payload.artifacts ?? []).filter((artifact) => artifact.name && artifact.image);
+}
 
 async function fetchMetMuseumArtifacts(): Promise<Artifact[]> {
   const searchEndpoint = new URL('https://collectionapi.metmuseum.org/public/collection/v1/search');
@@ -3113,7 +3151,14 @@ function ArtifactPlanner(props: TeacherWorkspaceProps) {
               />
               <span>{t(props.language, '用于任务', 'For Missions')}</span>
             </label>
-            <img src={artifact.image} alt="" />
+            <img
+              src={artifact.image}
+              alt=""
+              onError={(event) => {
+                const image = event.currentTarget;
+                if (image.src !== ARTIFACT_IMAGE_FALLBACK) image.src = ARTIFACT_IMAGE_FALLBACK;
+              }}
+            />
             <div>
               <small>{artifact.era} · {artifact.gallery}</small>
               <h3>{artifact.name}</h3>
