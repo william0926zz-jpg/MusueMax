@@ -3099,6 +3099,19 @@ function MuseumSearch({ language, query, setQuery, museums, selectedMuseum, onSe
 }
 
 function ArtifactPlanner(props: TeacherWorkspaceProps) {
+  const [artifactQuery, setArtifactQuery] = useState('');
+  const normalizedArtifactQuery = artifactQuery.trim().toLowerCase();
+  const visibleArtifacts = normalizedArtifactQuery
+    ? props.artifacts.filter((artifact) => [
+      artifact.name,
+      artifact.era,
+      artifact.gallery,
+      artifact.summary,
+      artifact.sourceName ?? '',
+      artifact.educationTags.join(' '),
+    ].join(' ').toLowerCase().includes(normalizedArtifactQuery))
+    : props.artifacts;
+
   return (
     <section className="panel">
       <div className="section-heading split-heading">
@@ -3116,7 +3129,22 @@ function ArtifactPlanner(props: TeacherWorkspaceProps) {
         </div>
       )}
       <div className="selection-summary">
-        {t(props.language, '当前展示', 'Showing')} <strong>{props.artifacts.length}</strong> {t(props.language, '件馆藏；已选择', 'artifacts; selected')} <strong>{props.selectedArtifactIds.length}</strong> {t(props.language, '件用于生成任务，需保持 5-10 件', 'for mission generation. Keep 5-10 selected.')}
+        {t(props.language, '当前展示', 'Showing')} <strong>{visibleArtifacts.length}</strong> / <strong>{props.artifacts.length}</strong> {t(props.language, '件馆藏；已选择', 'artifacts; selected')} <strong>{props.selectedArtifactIds.length}</strong> {t(props.language, '件用于生成任务，需保持 5-10 件', 'for mission generation. Keep 5-10 selected.')}
+      </div>
+      <div className="artifact-search-row">
+        <label className="searchbox artifact-searchbox">
+          <Search size={18} />
+          <input
+            value={artifactQuery}
+            onChange={(event) => setArtifactQuery(event.target.value)}
+            placeholder={t(props.language, '搜索文物：名称、年代、展区、关键词...', 'Search artifacts: name, era, gallery, keyword...')}
+          />
+        </label>
+        {artifactQuery && (
+          <button className="ghost-button compact-button" onClick={() => setArtifactQuery('')}>
+            {t(props.language, '清除搜索', 'Clear Search')}
+          </button>
+        )}
       </div>
       <div className="planner-note-row">
         <div className="helper-card">
@@ -3136,7 +3164,9 @@ function ArtifactPlanner(props: TeacherWorkspaceProps) {
         </button>
       </div>
       <div className="artifact-grid">
-        {props.artifacts.map((artifact, index) => (
+        {visibleArtifacts.map((artifact) => {
+          const artifactIndex = props.artifacts.findIndex((item) => item.id === artifact.id);
+          return (
           <article className={props.selectedArtifactIds.includes(artifact.id) ? 'artifact-card selected' : 'artifact-card'} key={artifact.id}>
             {props.selectedArtifactIds.includes(artifact.id) && (
               <span className="artifact-order-badge">
@@ -3167,14 +3197,19 @@ function ArtifactPlanner(props: TeacherWorkspaceProps) {
               {artifact.sourceUrl && <a className="source-link artifact-source" href={artifact.sourceUrl} target="_blank" rel="noreferrer">{t(props.language, '来源：', 'Source: ')}{artifact.sourceName}</a>}
             </div>
             <footer>
-              <button title={t(props.language, '上移', 'Move up')} onClick={() => props.onMoveArtifact(index, -1)}>↑</button>
-              <button title={t(props.language, '下移', 'Move down')} onClick={() => props.onMoveArtifact(index, 1)}>↓</button>
+              <button title={t(props.language, '上移', 'Move up')} onClick={() => props.onMoveArtifact(artifactIndex, -1)}>↑</button>
+              <button title={t(props.language, '下移', 'Move down')} onClick={() => props.onMoveArtifact(artifactIndex, 1)}>↓</button>
               <button title={t(props.language, '替换藏品', 'Replace artifact')} onClick={() => props.onReplaceArtifact(artifact.id)}><RefreshCw size={16} /></button>
               <button title={t(props.language, '删除藏品', 'Remove artifact')} onClick={() => props.onRemoveArtifact(artifact.id)}><Trash2 size={16} /></button>
             </footer>
           </article>
-        ))}
+        );})}
       </div>
+      {visibleArtifacts.length === 0 && (
+        <div className="inline-alert">
+          {t(props.language, '没有找到匹配的藏品，换个关键词试试。', 'No matching artifacts found. Try another keyword.')}
+        </div>
+      )}
     </section>
   );
 }

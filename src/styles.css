@@ -759,15 +759,15 @@ button {
 
 .artifact-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(245px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
 }
 
 .artifact-card {
   position: relative;
   display: grid;
-  grid-template-rows: 260px 1fr auto;
-  min-height: 520px;
+  grid-template-rows: 205px 1fr auto;
+  min-height: 430px;
   border: 1px solid #dfd7c9;
   border-radius: 8px;
   background: #ffffff;
@@ -806,7 +806,7 @@ button {
 .selection-summary {
   display: inline-flex;
   align-items: center;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   padding: 10px 12px;
   border-radius: 8px;
   background: #f2eadb;
@@ -817,7 +817,24 @@ button {
 .selection-summary strong {
   margin: 0 4px;
   color: #bd5a31;
-  font-size: 20px;
+  font-size: 18px;
+}
+
+.artifact-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin: 0 0 16px;
+}
+
+.artifact-searchbox {
+  min-height: 46px;
+}
+
+.compact-button {
+  min-height: 42px;
+  padding: 0 14px;
 }
 
 .planner-top-actions {
@@ -863,9 +880,16 @@ button {
   line-height: 1.5;
 }
 
-.artifact-card div { padding: 14px; }
-.artifact-card h3, .mission-card h3 { margin: 6px 0; }
-.artifact-card p { font-size: 14px; }
+.artifact-card div { padding: 12px; }
+.artifact-card h3, .mission-card h3 { margin: 5px 0; }
+.artifact-card h3 { font-size: 17px; line-height: 1.3; }
+.artifact-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
 
 .artifact-order-badge {
   position: absolute;
@@ -893,7 +917,7 @@ button {
 .artifact-card footer button {
   display: grid;
   place-items: center;
-  min-height: 42px;
+  min-height: 38px;
   border: 0;
   border-right: 1px solid #e4ded3;
   background: #fffaf2;
@@ -1869,9 +1893,10 @@ body.theme-night .mission-map .done {
   .sidebar { grid-template-columns: 1fr 1fr; }
   .museum-card { grid-template-columns: 1fr; }
   .museum-card img { height: 170px; }
-  .artifact-card { grid-template-rows: 220px 1fr auto; min-height: 480px; }
+  .artifact-card { grid-template-rows: 190px 1fr auto; min-height: 420px; }
   .artifact-grid, .mission-card dl, .summary-grid, .team-strip, .team-grid, .team-choice-grid, .adventure-chronicle { grid-template-columns: 1fr; }
   .planner-note-row, .settings-overview, .team-summary-strip { grid-template-columns: 1fr; }
+  .artifact-search-row { grid-template-columns: 1fr; }
   .search-row { grid-template-columns: 1fr; }
   .student-hero { padding: 36px 0; }
   .student-hero > div, .story-panel, .result-panel, .achievement-card { padding: 24px; }

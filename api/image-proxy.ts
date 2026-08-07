@@ -23,6 +23,7 @@ export default async function handler(req: any, res: any) {
     'www.rijksmuseum.nl',
     'images.rijksmuseum.nl',
     'lh3.googleusercontent.com',
+    'commons.wikimedia.org',
     'upload.wikimedia.org',
   ];
 
