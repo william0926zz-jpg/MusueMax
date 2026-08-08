@@ -566,6 +566,69 @@ function downloadTextFile(filename: string, content: string) {
   downloadFile(filename, content, 'text/plain;charset=utf-8');
 }
 
+const RECOGNITION_IMAGE_TARGET_BYTES = 2_400_000;
+const RECOGNITION_IMAGE_MAX_SIDE = 1280;
+const RECOGNITION_IMAGE_MIN_SIDE = 720;
+const RECOGNITION_IMAGE_INITIAL_QUALITY = 0.78;
+const RECOGNITION_IMAGE_MIN_QUALITY = 0.52;
+
+function loadImageForCompression(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('照片读取失败，请重新选择图片。'));
+    };
+    image.src = url;
+  });
+}
+
+function estimateDataUrlBytes(dataUrl: string) {
+  const base64 = dataUrl.split(',')[1] ?? '';
+  return Math.ceil(base64.length * 0.75);
+}
+
+function renderCompressedImage(image: HTMLImageElement, maxSide: number, quality: number) {
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('当前浏览器无法压缩照片，请尝试重新拍摄或更换浏览器。');
+  context.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+async function fileToRecognitionImageDataUrl(file: File) {
+  if (file.size <= RECOGNITION_IMAGE_TARGET_BYTES && file.type === 'image/jpeg') {
+    return fileToDataUrl(file);
+  }
+
+  const image = await loadImageForCompression(file);
+  let maxSide = RECOGNITION_IMAGE_MAX_SIDE;
+  let quality = RECOGNITION_IMAGE_INITIAL_QUALITY;
+  let bestDataUrl = renderCompressedImage(image, maxSide, quality);
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (estimateDataUrlBytes(bestDataUrl) <= RECOGNITION_IMAGE_TARGET_BYTES) return bestDataUrl;
+    if (quality > RECOGNITION_IMAGE_MIN_QUALITY) {
+      quality = Math.max(RECOGNITION_IMAGE_MIN_QUALITY, quality - 0.08);
+    } else {
+      maxSide = Math.max(RECOGNITION_IMAGE_MIN_SIDE, Math.round(maxSide * 0.84));
+    }
+    bestDataUrl = renderCompressedImage(image, maxSide, quality);
+  }
+
+  return bestDataUrl;
+}
+
 function fileToDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1783,7 +1846,7 @@ function App() {
 
     setIsRecognizing(true);
     try {
-      const imageDataUrl = await fileToDataUrl(uploadedFile);
+      const imageDataUrl = await fileToRecognitionImageDataUrl(uploadedFile);
       const response = await fetch('/api/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

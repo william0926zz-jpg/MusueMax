@@ -8,7 +8,7 @@ export const config = {
   maxDuration: 60,
   api: {
     bodyParser: {
-      sizeLimit: '12mb',
+      sizeLimit: '4mb',
     },
   },
 };
